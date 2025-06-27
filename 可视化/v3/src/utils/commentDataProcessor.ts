@@ -1,4 +1,4 @@
-import { CommentData, GraphData, GraphNode, GraphLink, CommentStats } from '@/types/comment';
+import { GraphData, GraphNode, GraphLink, CommentStats } from '@/types/comment';
 
 interface RawComment {
   评论ID: number;
