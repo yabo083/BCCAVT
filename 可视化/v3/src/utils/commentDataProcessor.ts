@@ -136,6 +136,35 @@ export class CommentDataProcessor {
     // 处理所有顶级评论
     this.rawData.forEach(comment => processComment(comment));
 
+    // === 补全所有出现在links中的节点 ===
+    this.graphData.links.forEach(link => {
+      const sourceId = link.source.toString();
+      const targetId = link.target.toString();
+      if (!nodeMap.has(sourceId)) {
+        nodeMap.set(sourceId, {
+          id: sourceId,
+          name: '',
+          likes: 0,
+          degree: 0,
+          content: '',
+          time: 0,
+          root: false
+        });
+      }
+      if (!nodeMap.has(targetId)) {
+        nodeMap.set(targetId, {
+          id: targetId,
+          name: '',
+          likes: 0,
+          degree: 0,
+          content: '',
+          time: 0,
+          root: false
+        });
+      }
+    });
+    // === 补全结束 ===
+
     // 计算最终统计数据
     this.stats.totalUsers = uniqueUsers.size;
     this.stats.averageCommentLength = totalLength / this.stats.totalComments;
@@ -146,10 +175,10 @@ export class CommentDataProcessor {
       (this.stats.latestComment - this.stats.earliestComment) / (24 * 60 * 60)
     );
 
-    // 计算节点度数
+    // 计算节点度数（此时nodeMap已完整）
     this.calculateDegrees(nodeMap);
 
-    // 保存处理后的数据
+    // 保存处理后的数据（此时degree已赋值）
     this.graphData.nodes = Array.from(nodeMap.values());
   }
 
@@ -177,8 +206,8 @@ export class CommentDataProcessor {
     });
 
     // 更新节点的度数属性
-    this.graphData.nodes.forEach(node => {
-      node.degree = this.nodeDegrees.get(node.id) || 0;
+    nodeMap.forEach((node, id) => {
+      node.degree = this.nodeDegrees.get(id) || 0;
     });
 
     // 计算最小、最大和平均度数
@@ -278,7 +307,7 @@ export class CommentDataProcessor {
     links: GraphLink[];
   } {
     // v2中孤立节点是度数为0或1的节点（低连接度点）
-    const isolatedNodes = this.graphData.nodes.filter(node => node.degree <= 1);
+    const isolatedNodes = this.graphData.nodes.filter(node => node.degree === 0);
     const isolatedNodeIds = new Set(isolatedNodes.map(n => n.id));
     
     const isolatedLinks = this.graphData.links.filter(link => {
