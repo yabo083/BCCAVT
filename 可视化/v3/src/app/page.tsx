@@ -4,7 +4,6 @@ import { useState, useRef, useEffect } from "react";
 import { CommentDataProcessor } from "@/utils/commentDataProcessor";
 import { CommentData } from "@/types/comment";
 import { VisualizationComponent } from "@/components/VisualizationComponent";
-import Image from "next/image";
 
 // 支持的图片API
 const IMAGE_APIS = [
