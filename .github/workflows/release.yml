@@ -1,0 +1,43 @@
+# 工作流的名称
+name: Create Release
+
+# 触发工作流的事件
+on:
+  # 当一个以 'v' 开头的标签被推送到仓库时触发
+  # 例如：v1.0, v0.1.1, v1.2.3-alpha
+  push:
+    tags:
+      - 'v*'
+
+# 工作流执行的任务
+jobs:
+  # 任务的ID，可以自定义
+  build-and-release:
+    # 任务运行的虚拟环境
+    runs-on: ubuntu-latest
+    # 任务执行的步骤
+    steps:
+      # 第一步：检出代码
+      # 这是必须的步骤，让工作流可以访问你的仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 第二步：创建 Release
+      # 使用一个非常流行的第三方 Action 来简化创建 Release 的过程
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          # 这个是必须的，Action 需要用它来获得创建 Release 的权限
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 标签名，${{ github.ref }} 会自动获取触发工作流的标签名，例如 refs/tags/v1.0.0
+          tag_name: ${{ github.ref }}
+          # Release 的标题，同样使用标签名
+          release_name: Release ${{ github.ref }}
+          # Release 的描述内容。设置为 true 会自动根据两次 Release 之间的 commit 信息生成
+          # 这就是你想要的自动化功能！
+          generate_release_notes: true
+          # 是否为草稿。设置为 false 会直接发布
+          draft: false
+          # 是否为预发布版本。可以根据你的需要设置为 true 或 false
+          prerelease: true
