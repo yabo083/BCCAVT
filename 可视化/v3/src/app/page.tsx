@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { CommentDataProcessor } from "@/utils/commentDataProcessor";
 import { CommentData } from "@/types/comment";
 import { VisualizationComponent } from "@/components/VisualizationComponent";
@@ -179,15 +180,18 @@ export default function Home() {
               </span>
             </label>
           </div>
-          {/* 一站式爬取（开发中）- 右侧 */}
+          {/* 一站式爬取 - 右侧 */}
           <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            <Link href="/crawler">
             <button
-              disabled
-              className="flex items-center justify-center w-24 h-24 bg-gradient-to-br from-blue-200 via-purple-200 to-pink-200 text-blue-400 font-bold text-base shadow-xl border-2 border-white/60 cursor-not-allowed rounded-xl rotate-45 select-none opacity-80 hover:scale-105 transition-all animate-fade-in-slow"
-              style={{ boxShadow: "0 0 12px 0 #a5b4fc33" }}
+                className="flex items-center justify-center w-24 h-24 bg-gradient-to-br from-blue-400 via-purple-400 to-pink-400 text-white font-bold text-base shadow-2xl border-2 border-white/60 cursor-pointer rounded-xl rotate-45 select-none hover:scale-110 hover:brightness-110 hover:ring-pink-300/60 active:scale-95 transition-all animate-fade-in-slow"
+                style={{ 
+                  boxShadow: "0 0 24px 0 #a5b4fc55, 0 0 8px 2px #f472b655",
+                }}
             >
-              <span className="-rotate-45 tracking-wide">一站式爬取</span>
+                <span className="-rotate-45 tracking-wide drop-shadow">一站式爬取</span>
             </button>
+            </Link>
           </div>
           {/* 尽请期待1 - 底部 */}
           <div className="absolute left-1/2 bottom-0 -translate-x-1/2">
