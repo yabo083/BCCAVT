@@ -279,26 +279,185 @@ export class CommentDataProcessor {
     };
   }
 
-  // 识别线性聚类
+  // 识别线性聚类（改进版：在连通组件中寻找最长路径）
   public findLinearClusters(): {
     chains: { nodes: GraphNode[]; links: GraphLink[] }[];
   } {
     const chains: { nodes: GraphNode[]; links: GraphLink[] }[] = [];
-    const visitedNodes = new Set<string>();
 
-    // 查找可能的线性结构起点（度数为1的节点）
-    const startNodes = this.graphData.nodes.filter(node => node.degree === 1);
+    // 建立邻接表
+    const adjacencyList = new Map<string, string[]>();
+    this.graphData.nodes.forEach(node => {
+      adjacencyList.set(node.id, []);
+    });
 
-    startNodes.forEach(startNode => {
-      if (!visitedNodes.has(startNode.id)) {
-        const chain = this.traceLinearChain(startNode.id, visitedNodes);
-        if (chain.nodes.length >= 3) { // 只保留长度大于等于3的链
-          chains.push(chain);
+    this.graphData.links.forEach(link => {
+      const sourceId = link.source.toString();
+      const targetId = link.target.toString();
+      adjacencyList.get(sourceId)?.push(targetId);
+      adjacencyList.get(targetId)?.push(sourceId);
+    });
+
+    // 找到所有连通组件
+    const components = this.findConnectedComponents(adjacencyList);
+
+    // 在每个连通组件中寻找最长路径
+    components.forEach((component, index) => {
+      console.log(`=== 连通组件 ${index + 1} ===`);
+      console.log(`节点数量: ${component.length}`);
+      console.log(`节点: ${component.join(', ')}`);
+      
+      if (component.length >= 3) { // 只处理至少有3个节点的组件
+        const longestPath = this.findLongestPathInComponent(component, adjacencyList);
+        console.log(`最长路径长度: ${longestPath.length}`);
+        console.log(`最长路径: ${longestPath.join(' -> ')}`);
+        
+        if (longestPath.length >= 3) { // 最长路径至少要有3个节点
+          const pathNodes = longestPath.map(nodeId => 
+            this.graphData.nodes.find(n => n.id === nodeId)!
+          );
+          const pathLinks = this.getLinksForPath(longestPath);
+          
+          console.log(`添加线性聚类: ${pathNodes.map(n => n.name).join(' -> ')}`);
+          
+          chains.push({
+            nodes: pathNodes,
+            links: pathLinks
+          });
         }
       }
     });
 
+    console.log(`=== 线性聚类总结 ===`);
+    console.log(`总共识别出 ${chains.length} 条链`);
+    chains.forEach((chain, index) => {
+      console.log(`链 ${index + 1}: ${chain.nodes.map(n => n.name).join(' -> ')} (${chain.nodes.length} 个节点)`);
+    });
+
     return { chains };
+  }
+
+  // 找到所有连通组件
+  private findConnectedComponents(adjacencyList: Map<string, string[]>): string[][] {
+    const visited = new Set<string>();
+    const components: string[][] = [];
+
+    for (const nodeId of adjacencyList.keys()) {
+      if (!visited.has(nodeId)) {
+        const component: string[] = [];
+        this.dfsComponent(nodeId, adjacencyList, visited, component);
+        if (component.length > 1) { // 至少要有2个节点才算连通组件
+          components.push(component);
+        }
+      }
+    }
+
+    return components;
+  }
+
+  // DFS遍历连通组件
+  private dfsComponent(
+    nodeId: string,
+    adjacencyList: Map<string, string[]>,
+    visited: Set<string>,
+    component: string[]
+  ): void {
+    visited.add(nodeId);
+    component.push(nodeId);
+
+    const neighbors = adjacencyList.get(nodeId) || [];
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        this.dfsComponent(neighbor, adjacencyList, visited, component);
+      }
+    }
+  }
+
+  // 在连通组件中寻找最长路径（优化版）
+  private findLongestPathInComponent(
+    component: string[],
+    adjacencyList: Map<string, string[]>
+  ): string[] {
+    let longestPath: string[] = [];
+
+    // 优化：只从边界节点（度数为1的节点）和关键节点开始搜索
+    const candidateStarts = component.filter(nodeId => {
+      const neighbors = adjacencyList.get(nodeId) || [];
+      return neighbors.length <= 2; // 度数小于等于2的节点更可能是路径的端点
+    });
+
+    // 如果没有明显的起点，就从所有节点开始（但限制搜索深度）
+    if (candidateStarts.length === 0) {
+      candidateStarts.push(...component.slice(0, Math.min(5, component.length))); // 最多尝试5个节点
+    }
+
+    for (const startNode of candidateStarts) {
+      const path = this.findLongestPathFromNodeOptimized(startNode, adjacencyList, new Set(), 0, 20); // 限制最大深度为20
+      if (path.length > longestPath.length) {
+        longestPath = path;
+      }
+    }
+
+    return longestPath;
+  }
+
+  // 优化的DFS最长路径搜索（带深度限制）
+  private findLongestPathFromNodeOptimized(
+    startNode: string,
+    adjacencyList: Map<string, string[]>,
+    visited: Set<string>,
+    depth: number,
+    maxDepth: number
+  ): string[] {
+    if (depth > maxDepth) return [startNode]; // 防止过深的搜索
+
+    visited.add(startNode);
+    let longestPath = [startNode];
+
+    const neighbors = adjacencyList.get(startNode) || [];
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        const pathFromNeighbor = this.findLongestPathFromNodeOptimized(
+          neighbor, 
+          adjacencyList, 
+          new Set(visited), 
+          depth + 1, 
+          maxDepth
+        );
+        const currentPath = [startNode, ...pathFromNeighbor];
+        if (currentPath.length > longestPath.length) {
+          longestPath = currentPath;
+        }
+      }
+    }
+
+    visited.delete(startNode);
+    return longestPath;
+  }
+
+  // 根据节点路径获取对应的连接
+  private getLinksForPath(path: string[]): GraphLink[] {
+    const pathLinks: GraphLink[] = [];
+    
+    for (let i = 0; i < path.length - 1; i++) {
+      const currentNode = path[i];
+      const nextNode = path[i + 1];
+      
+      const link = this.graphData.links.find(link => {
+        const sourceId = link.source.toString();
+        const targetId = link.target.toString();
+        return (sourceId === currentNode && targetId === nextNode) ||
+               (sourceId === nextNode && targetId === currentNode);
+      });
+      
+      if (link) {
+        pathLinks.push(link);
+      }
+    }
+    
+    console.log(`路径 [${path.join(' -> ')}] 包含 ${pathLinks.length} 条连接`);
+    
+    return pathLinks;
   }
 
   // 识别孤立节点（参考v2实现）
@@ -319,99 +478,6 @@ export class CommentDataProcessor {
     return {
       nodes: isolatedNodes,
       links: isolatedLinks
-    };
-  }
-
-  private findDirectConnections(nodeId: string): {
-    nodes: GraphNode[];
-    links: GraphLink[];
-  } {
-    const connectedNodes: GraphNode[] = [];
-    const connectedLinks: GraphLink[] = [];
-
-    this.graphData.links.forEach(link => {
-      if (link.source.toString() === nodeId) {
-        const targetNode = this.graphData.nodes.find(n => n.id === link.target.toString());
-        if (targetNode) {
-          connectedNodes.push(targetNode);
-          connectedLinks.push(link);
-        }
-      } else if (link.target.toString() === nodeId) {
-        const sourceNode = this.graphData.nodes.find(n => n.id === link.source.toString());
-        if (sourceNode) {
-          connectedNodes.push(sourceNode);
-          connectedLinks.push(link);
-        }
-      }
-    });
-
-    return {
-      nodes: connectedNodes,
-      links: connectedLinks
-    };
-  }
-
-  private traceLinearChain(
-    startNodeId: string,
-    visitedNodes: Set<string>
-  ): {
-    nodes: GraphNode[];
-    links: GraphLink[];
-  } {
-    const chainNodes: GraphNode[] = [];
-    const chainLinks: GraphLink[] = [];
-    let currentNodeId = startNodeId;
-    visitedNodes.add(startNodeId);
-
-    const startNode = this.graphData.nodes.find(n => n.id === startNodeId);
-    if (startNode) {
-      chainNodes.push(startNode);
-    }
-
-    let continueTracing = true;
-    while (continueTracing) {
-      continueTracing = false;
-      
-      // 查找与当前节点相连的下一个节点
-      for (const link of this.graphData.links) {
-        const sourceId = link.source.toString();
-        const targetId = link.target.toString();
-        
-        let nextNodeId: string | null = null;
-        
-        // 如果当前节点是源节点，目标节点是下一个
-        if (sourceId === currentNodeId && !visitedNodes.has(targetId)) {
-          nextNodeId = targetId;
-          chainLinks.push(link);
-        }
-        // 如果当前节点是目标节点，源节点是下一个
-        else if (targetId === currentNodeId && !visitedNodes.has(sourceId)) {
-          nextNodeId = sourceId;
-          chainLinks.push(link);
-        }
-        
-        if (nextNodeId) {
-          const nextNode = this.graphData.nodes.find(n => n.id === nextNodeId);
-          if (nextNode) {
-            // 检查下一个节点的度数，确保它是链的一部分
-            const nextNodeDegree = nextNode.degree;
-            
-            // 度数为2的节点是链中间的节点，度数为1的节点可能是链的终点
-            if (nextNodeDegree <= 2) {
-              chainNodes.push(nextNode);
-              visitedNodes.add(nextNodeId);
-              currentNodeId = nextNodeId;
-              continueTracing = true;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    return {
-      nodes: chainNodes,
-      links: chainLinks
     };
   }
 

@@ -6,6 +6,8 @@ from celery_app import app as celery_app
 from models import CrawlRequest, CrawlResponse, TaskStatusResponse, TaskStatus, TaskResult
 import os
 import time
+import traceback
+import uvicorn
 from typing import Dict, Any
 from urllib.parse import quote
 
@@ -23,6 +25,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],  # 明确暴露 Content-Disposition 头
 )
 
 # 创建输出目录
@@ -269,28 +272,55 @@ async def get_task_status(task_id: str, request: Request):
         elif status == 'SUCCESS':
             # 任务成功完成
             result = task_result_data
-            if isinstance(result, dict) and 'result' in result:
-                task_result_content = result['result']
-                
-                # 生成文件下载URL
-                file_path = task_result_content.get('file_path')
-                download_url = None
-                if file_path and os.path.exists(file_path):
-                    # 存储任务ID与文件路径的映射
-                    task_file_mapping[task_id] = file_path
-                    # 生成下载URL
-                    download_url = f"/api/download/{task_id}"
-                    # 构建完整的文件URL
-                    base_url = f"{request.url.scheme}://{request.url.netloc}"
-                    file_url = f"{base_url}{download_url}"
-                    task_result_content['file_url'] = file_url
-                
-                response_data["result"] = TaskResult(**task_result_content)
-                response_data["progress"] = "100% - 完成"
-                response_data["download_url"] = download_url
-            else:
-                response_data["result"] = result
-                response_data["progress"] = "100% - 完成"
+            try:
+                if isinstance(result, dict):
+                    # 处理直接的任务结果
+                    if 'result' in result:
+                        task_result_content = result['result']
+                    else:
+                        # 如果没有嵌套的result字段，直接使用整个result
+                        task_result_content = result
+                    
+                    # 安全地获取文件路径
+                    file_path = task_result_content.get('file_path')
+                    download_url = None
+                    
+                    if file_path and os.path.exists(file_path):
+                        # 存储任务ID与文件路径的映射
+                        task_file_mapping[task_id] = file_path
+                        # 生成下载URL
+                        download_url = f"/api/download/{task_id}"
+                        # 构建完整的文件URL
+                        base_url = f"{request.url.scheme}://{request.url.netloc}"
+                        file_url = f"{base_url}{download_url}"
+                        task_result_content['file_url'] = file_url
+                    
+                    # 安全地创建TaskResult对象
+                    try:
+                        response_data["result"] = TaskResult(**task_result_content)
+                    except Exception as model_error:
+                        print(f"❌ 创建TaskResult对象失败: {model_error}")
+                        # 如果模型创建失败，创建一个基本的结果对象
+                        response_data["result"] = TaskResult(
+                            file_path=task_result_content.get('file_path'),
+                            video_title=task_result_content.get('video_title', '未知标题'),
+                            bv_id=task_result_content.get('bv_id'),
+                            total_comments=task_result_content.get('total_comments', 0),
+                            independent_comments=task_result_content.get('independent_comments', 0)
+                        )
+                    
+                    response_data["progress"] = "100% - 完成"
+                    response_data["download_url"] = download_url
+                else:
+                    # 如果result不是字典，创建基本响应
+                    response_data["result"] = None
+                    response_data["progress"] = "100% - 完成（结果格式异常）"
+                    
+            except Exception as success_error:
+                print(f"❌ 处理SUCCESS状态时出错: {success_error}")
+                response_data["result"] = None
+                response_data["progress"] = "100% - 完成（处理结果时出错）"
+                response_data["error"] = f"处理成功结果时出错: {str(success_error)}"
                 
         elif status == 'FAILURE':
             # 任务失败 - 安全处理异常信息
@@ -336,9 +366,20 @@ async def get_task_status(task_id: str, request: Request):
         return TaskStatusResponse(**response_data)
         
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"查询任务状态时发生错误: {str(e)}"
+        error_details = traceback.format_exc()
+        print(f"❌ 查询任务状态时发生严重错误:")
+        print(f"   - 任务ID: {task_id}")
+        print(f"   - 错误: {str(e)}")
+        print(f"   - 详细错误信息:\n{error_details}")
+        
+        # 返回安全的错误响应
+        return TaskStatusResponse(
+            task_id=task_id,
+            status="ERROR",
+            result=None,
+            progress="查询状态时发生错误",
+            error=f"状态查询失败: {str(e)}",
+            download_url=None
         )
 
 
@@ -354,38 +395,100 @@ async def download_file(task_id: str):
         文件下载响应
     """
     try:
+        print(f"=== 下载请求处理 ===")
+        print(f"🔍 任务ID: {task_id}")
+        print(f"🔍 当前文件映射: {list(task_file_mapping.keys())}")
+        
         # 检查任务是否存在文件映射
         if task_id not in task_file_mapping:
+            print(f"❌ 任务 {task_id} 不在文件映射中")
             raise HTTPException(
                 status_code=404,
                 detail="任务文件不存在或任务尚未完成"
             )
         
         file_path = task_file_mapping[task_id]
+        print(f"🔍 文件路径: {file_path}")
         
         # 检查文件是否存在
         if not os.path.exists(file_path):
+            print(f"❌ 文件不存在: {file_path}")
             raise HTTPException(
                 status_code=404,
                 detail="文件不存在"
             )
         
-        # 获取文件名
+        # 获取文件名和大小
         filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        print(f"🔍 原始文件名: {repr(filename)}")  # 使用 repr 来显示特殊字符
+        print(f"🔍 文件大小: {file_size} bytes")
+        
+        # 安全地处理文件名编码
+        try:
+            # 确保文件名是有效的UTF-8字符串
+            if isinstance(filename, bytes):
+                filename = filename.decode('utf-8', errors='replace')
+            
+            # 对文件名进行URL编码以处理中文字符，但保留基本的安全字符
+            encoded_filename = quote(filename, safe='')
+            print(f"🔍 编码后文件名: {encoded_filename}")
+            
+            # 创建一个ASCII安全的备用文件名
+            ascii_filename = filename.encode('ascii', errors='ignore').decode('ascii')
+            if not ascii_filename:
+                ascii_filename = 'comments.json'
+            
+            print(f"🔍 ASCII安全文件名: {ascii_filename}")
+            
+            # 构建 Content-Disposition 头，使用更安全的格式
+            content_disposition = f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+            print(f"🔍 Content-Disposition: {repr(content_disposition)}")
+            
+        except Exception as encoding_error:
+            print(f"❌ 文件名编码处理失败: {encoding_error}")
+            # 使用默认的安全文件名
+            filename = "comments.json"
+            encoded_filename = "comments.json"
+            ascii_filename = "comments.json"
+            content_disposition = 'attachment; filename="comments.json"'
+            print(f"🔍 使用默认文件名: {filename}")
         
         # 返回文件下载响应
-        return FileResponse(
-            path=file_path,
-            filename=filename,
-            media_type='application/json',
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
-            }
-        )
+        try:
+            response = FileResponse(
+                path=file_path,
+                filename=ascii_filename,  # 使用ASCII安全的文件名传给FileResponse
+                media_type='application/json',
+                headers={
+                    "Content-Disposition": content_disposition,
+                    "Content-Length": str(file_size),
+                    "Cache-Control": "no-cache",
+                    "Access-Control-Expose-Headers": "Content-Disposition"  # 确保CORS暴露这个头
+                }
+            )
+            
+            print(f"✅ 文件响应已创建，准备发送")
+            return response
+            
+        except Exception as response_error:
+            print(f"❌ 创建FileResponse失败: {response_error}")
+            # 尝试使用最简单的响应方式
+            return FileResponse(
+                path=file_path,
+                filename="comments.json",
+                media_type='application/json',
+                headers={
+                    "Content-Disposition": 'attachment; filename="comments.json"',
+                    "Access-Control-Expose-Headers": "Content-Disposition"
+                }
+            )
         
     except HTTPException:
         raise
     except Exception as e:
+        print(f"❌ 下载文件时发生错误: {str(e)}")
+        print(f"❌ 错误详情: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail=f"下载文件时发生错误: {str(e)}"
@@ -507,110 +610,6 @@ async def health_check():
         
         return error_info
 
-
-@app.get("/api/debug/celery")
-async def debug_celery():
-    """
-    Celery 调试端点 - 提供详细的 Celery 连接和配置信息
-    """
-    try:
-        inspect = celery_app.control.inspect()
-        
-        debug_info = {
-            "celery_app_name": celery_app.main,
-            "broker_url": getattr(celery_app.conf, 'broker_url', 'Unknown'),
-            "result_backend": getattr(celery_app.conf, 'result_backend', 'Unknown'),
-            "task_routes": getattr(celery_app.conf, 'task_routes', {}),
-            "workers": {},
-            "queues": {},
-            "tasks": {},
-            "connection_test": "unknown"
-        }
-        
-        # 测试连接
-        try:
-            stats = inspect.stats()
-            if stats:
-                debug_info["connection_test"] = "success"
-                debug_info["workers"] = {
-                    "count": len(stats),
-                    "details": stats
-                }
-            else:
-                debug_info["connection_test"] = "no_workers"
-                
-            # 获取活跃任务
-            active = inspect.active() or {}
-            reserved = inspect.reserved() or {}
-            scheduled = inspect.scheduled() or {}
-            registered = inspect.registered() or {}
-            
-            debug_info["tasks"] = {
-                "active": {worker: len(tasks) for worker, tasks in active.items()},
-                "reserved": {worker: len(tasks) for worker, tasks in reserved.items()},
-                "scheduled": {worker: len(tasks) for worker, tasks in scheduled.items()},
-                "registered": registered
-            }
-            
-        except Exception as conn_error:
-            debug_info["connection_test"] = f"failed: {str(conn_error)}"
-        
-        print("=== Celery 调试信息 ===")
-        print(f"🔍 App名称: {debug_info['celery_app_name']}")
-        print(f"🔍 Broker: {debug_info['broker_url']}")
-        print(f"🔍 Result Backend: {debug_info['result_backend']}")
-        print(f"🔍 连接测试: {debug_info['connection_test']}")
-        print(f"🔍 Workers: {debug_info['workers']}")
-        
-        return debug_info
-        
-    except Exception as e:
-        error_info = {
-            "error": str(e),
-            "message": "调试信息获取失败"
-        }
-        print(f"❌ Celery 调试失败: {str(e)}")
-        return error_info
-
-
-@app.post("/api/debug/test_task")
-async def test_celery_task():
-    """
-    测试 Celery 任务提交和执行
-    """
-    try:
-        print("=== 测试 Celery 任务 ===")
-        
-        # 提交测试任务
-        task = celery_app.send_task(
-            'celery_app.test_task'
-            # 使用默认队列
-        )
-        
-        print(f"✅ 测试任务已提交: {task.id}")
-        
-        # 等待一秒检查状态
-        import time
-        time.sleep(1)
-        
-        result = task.get(timeout=10)  # 等待最多10秒
-        
-        return {
-            "task_id": task.id,
-            "status": "success",
-            "result": result,
-            "message": "测试任务执行成功"
-        }
-        
-    except Exception as e:
-        print(f"❌ 测试任务失败: {str(e)}")
-        return {
-            "status": "failed",
-            "error": str(e),
-            "message": "测试任务执行失败"
-        }
-
-
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     """处理浏览器的 favicon 请求"""
@@ -621,7 +620,5 @@ async def favicon():
         # 返回 204 No Content，告诉浏览器没有 favicon
         return JSONResponse(status_code=204, content=None)
 
-
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

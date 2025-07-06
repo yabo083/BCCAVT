@@ -180,16 +180,41 @@ export async function getCrawlStatus(taskId: string) {
     const res = await fetchWithTimeout(url);
     
     if (!res.ok) {
-      return { error: `HTTP ${res.status}: ${res.statusText}` };
+      // 详细的错误处理
+      const errorText = await res.text();
+      console.error("状态查询失败:", errorText);
+      
+      return { 
+        error: `HTTP ${res.status}: ${res.statusText}`,
+        status: "ERROR",
+        progress: `状态查询失败: ${res.status}`,
+        task_id: taskId
+      };
     }
     
-    return await res.json();
+    const data = await res.json();
+    
+    // 确保返回的数据包含必要的字段
+    return {
+      task_id: data.task_id || taskId,
+      status: data.status || "UNKNOWN",
+      progress: data.progress || "状态未知",
+      result: data.result || null,
+      error: data.error || null,
+      download_url: data.download_url || null
+    };
+    
   } catch (error) {
-    console.error("API调用失败:", error);
-    if (error instanceof Error) {
-      return { error: `网络请求失败: ${error.message}` };
-    }
-    return { error: "网络请求失败，请检查后端服务是否启动" };
+    console.error("状态查询API调用失败:", error);
+    
+    return {
+      error: error instanceof Error ? `网络请求失败: ${error.message}` : "网络请求失败，请检查后端服务是否启动",
+      status: "ERROR", 
+      progress: "网络连接失败",
+      task_id: taskId,
+      result: null,
+      download_url: null
+    };
   }
 }
 
@@ -201,45 +226,108 @@ export async function getCrawlStatus(taskId: string) {
 export async function downloadCommentData(taskId: string) {
   try {
     const url = buildUrl(`/api/download/${taskId}`);
-    console.log("下载评论数据:", url);
+    console.log("=== 开始下载评论数据 ===");
+    console.log("下载URL:", url);
+    console.log("任务ID:", taskId);
     
     const res = await fetchWithTimeout(url);
+    
+    console.log("响应状态:", res.status);
+    console.log("响应状态文本:", res.statusText);
+    console.log("所有响应头:", Array.from(res.headers.entries()));
     
     if (!res.ok) {
       const errorText = await res.text();
       console.error("下载失败:", errorText);
+      console.error("响应状态:", res.status);
       return { error: `HTTP ${res.status}: ${res.statusText}` };
     }
-    
-    // 获取文件名
+
+    // 获取并解析 Content-Disposition 头
     const contentDisposition = res.headers.get('Content-Disposition');
-    let filename = 'comments.json';
+    let filename = 'comments.json'; // 默认文件名
+    
+    console.log("=== 文件名解析 ===");
+    console.log("Content-Disposition 原始值:", contentDisposition);
+    
     if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-      if (filenameMatch && filenameMatch[1]) {
-        filename = filenameMatch[1].replace(/['"]/g, '');
+      // 尝试多种解析方式
+      console.log("开始解析文件名...");
+      
+      // 方法1: 解析 filename*=UTF-8'' 格式（RFC 6266）
+      const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;,\n]*)/i);
+      if (utf8Match && utf8Match[1]) {
+        try {
+          filename = decodeURIComponent(utf8Match[1]);
+          console.log("✅ 使用 UTF-8 编码解析:", filename);
+        } catch (e) {
+          console.warn("❌ UTF-8 文件名解码失败:", e);
+        }
+      } else {
+        // 方法2: 解析普通 filename="" 格式
+        const normalMatch = contentDisposition.match(/filename="([^"]+)"/i);
+        if (normalMatch && normalMatch[1]) {
+          filename = normalMatch[1];
+          console.log("✅ 使用普通格式解析:", filename);
+        } else {
+          // 方法3: 解析无引号的 filename=xxx 格式
+          const simpleMatch = contentDisposition.match(/filename=([^;,\n]+)/i);
+          if (simpleMatch && simpleMatch[1]) {
+            filename = simpleMatch[1].trim();
+            console.log("✅ 使用简单格式解析:", filename);
+          } else {
+            console.warn("❌ 无法解析文件名，使用默认名称");
+          }
+        }
       }
+    } else {
+      console.warn("❌ 响应中没有 Content-Disposition 头");
     }
     
+    console.log("最终使用的文件名:", filename);
+    
     // 获取文件内容
+    console.log("=== 获取文件内容 ===");
     const blob = await res.blob();
+    console.log("文件大小:", blob.size, "bytes");
+    console.log("文件类型:", blob.type);
+    
+    if (blob.size === 0) {
+      console.error("❌ 文件大小为0，可能下载失败");
+      return { error: "下载的文件为空" };
+    }
     
     // 创建下载链接
+    console.log("=== 创建下载链接 ===");
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
     link.download = filename;
+    link.style.display = 'none'; // 隐藏链接
+    
+    // 添加到DOM并触发下载
     document.body.appendChild(link);
+    console.log("触发下载，文件名:", filename);
     link.click();
+    
+    // 清理资源
     document.body.removeChild(link);
     window.URL.revokeObjectURL(downloadUrl);
     
-    return { success: true, filename };
+    console.log("✅ 文件下载完成:", filename);
+    return { 
+      success: true, 
+      filename, 
+      fileSize: blob.size,
+      contentType: blob.type
+    };
+    
   } catch (error) {
-    console.error("下载失败:", error);
+    console.error("❌ 下载过程中发生错误:", error);
     if (error instanceof Error) {
       return { error: `下载失败: ${error.message}` };
     }
     return { error: "下载失败，请检查后端服务是否启动" };
   }
 }
+

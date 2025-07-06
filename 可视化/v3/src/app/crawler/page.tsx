@@ -171,33 +171,57 @@ export default function CrawlerPage() {
     pollingRef.current = setInterval(async () => {
       try {
         const data = await getCrawlStatus(task_id);
-        if (data.status) setCrawlStatus(data.status);
-        if (typeof data.progress === "number") setProgress(data.progress);
+        
+        // 检查是否有错误
+        if (data.error) {
+          console.error("轮询获取状态时出错:", data.error);
+          setCrawlStatus(`状态查询失败: ${data.error}`);
+          // 如果是网络错误，继续重试；如果是其他错误，停止轮询
+          if (data.error.includes("网络")) {
+            return; // 继续轮询
+          } else {
+            clearInterval(pollingRef.current!);
+            return;
+          }
+        }
+        
+        // 安全地获取状态和进度
+        const status = data.status || "UNKNOWN";
+        const progress = data.progress || "";
+        
+        // 更新状态显示
+        if (progress) {
+          setCrawlStatus(progress);
+        }
+        
+        // 处理数字进度
+        if (typeof data.progress === "number") {
+          setProgress(data.progress);
+        }
         
         // 根据后端定义的状态来决定是否停止轮询
-        // 终止状态：SUCCESS(成功), FAILURE(失败), REVOKED(撤销)
-        const terminalStates = ["SUCCESS", "FAILURE", "REVOKED"];
+        // 终止状态：SUCCESS(成功), FAILURE(失败), REVOKED(撤销), ERROR(错误)
+        const terminalStates = ["SUCCESS", "FAILURE", "REVOKED", "ERROR"];
         
-        if (terminalStates.includes(data.status)) {
+        if (terminalStates.includes(status)) {
           clearInterval(pollingRef.current!);
           
-          // 如果任务成功完成，显示下载按钮
-          if (data.status === "SUCCESS") {
+          // 根据不同状态处理
+          if (status === "SUCCESS") {
             setShowDownloadButton(true);
             setCrawlStatus("爬取完成！点击下载按钮获取评论数据");
-          } else if (data.status === "FAILURE") {
+          } else if (status === "FAILURE") {
             setCrawlStatus(`任务失败: ${data.error || "未知错误"}`);
-          } else if (data.status === "REVOKED") {
+          } else if (status === "REVOKED") {
             setCrawlStatus("任务已被撤销");
+          } else if (status === "ERROR") {
+            setCrawlStatus(`任务错误: ${data.error || "发生未知错误"}`);
           }
         } else {
           // 继续轮询的状态：PENDING(等待), STARTED(开始), PROGRESS(进行中), RETRY(重试)
-          // 更新进度信息
-          if (data.progress) {
-            setCrawlStatus(data.progress);
-          } else {
-            // 根据状态设置默认消息
-            switch (data.status) {
+          // 如果没有进度信息，根据状态设置默认消息
+          if (!progress) {
+            switch (status) {
               case "PENDING":
                 setCrawlStatus("任务等待中...");
                 break;
@@ -211,14 +235,17 @@ export default function CrawlerPage() {
                 setCrawlStatus("任务重试中...");
                 break;
               default:
-                setCrawlStatus(`任务状态: ${data.status}`);
+                setCrawlStatus(`任务状态: ${status}`);
             }
           }
         }
       } catch (err) {
-        console.error("轮询错误:", err);
-        setCrawlStatus("轮询失败: 后端API尚未实现");
-        clearInterval(pollingRef.current!);
+        console.error("轮询过程中发生异常:", err);
+        setCrawlStatus(`轮询异常: ${err instanceof Error ? err.message : '未知错误'}`);
+        // 网络异常时继续重试，其他异常停止轮询
+        if (!(err instanceof Error) || !err.message.includes("网络")) {
+          clearInterval(pollingRef.current!);
+        }
       }
     }, 2000);
   };

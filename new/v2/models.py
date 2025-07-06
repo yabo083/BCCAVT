@@ -7,6 +7,7 @@ class TaskStatus(str, Enum):
     """任务状态枚举"""
     PENDING = "PENDING"      # 等待中
     STARTED = "STARTED"      # 已开始
+    PROGRESS = "PROGRESS"    # 进行中
     SUCCESS = "SUCCESS"      # 成功完成
     FAILURE = "FAILURE"      # 失败
     RETRY = "RETRY"          # 重试中

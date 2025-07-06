@@ -329,23 +329,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
 
       // 定位到第一个匹配的节点
       if (targetNodes.length > 0) {
-        // 使用内联的定位逻辑避免循环依赖
-        const nodeId = targetNodes[0].id;
-        const node = nodes.find((n) => n.id === nodeId);
-        if (node && zoomRef.current && containerRef.current) {
-          const containerRect = containerRef.current.getBoundingClientRect();
-          const scale = 2;
-          const x = containerRect.width / 2 - (node.x || 0) * scale;
-          const y = containerRect.height / 2 - (node.y || 0) * scale;
-
-          svg
-            .transition()
-            .duration(750)
-            .call(
-              zoomRef.current.transform,
-              d3.zoomIdentity.translate(x, y).scale(scale)
-            );
-        }
+        locateNode(targetNodes[0].id);
       }
     }
   }, [searchQuery, nodes]);

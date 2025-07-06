@@ -1,10 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { CommentDataProcessor } from "@/utils/commentDataProcessor";
-import { CommentData } from "@/types/comment";
-import { VisualizationComponent } from "@/components/VisualizationComponent";
 
 // 支持的图片API
 const IMAGE_APIS = [
@@ -26,12 +23,6 @@ const IMAGE_APIS = [
 ];
 
 export default function Home() {
-  const [data, setData] = useState<CommentData[] | null>(null);
-  const [processor, setProcessor] = useState<CommentDataProcessor | null>(null);
-  const [error, setError] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   // 新增：每日图片
   const [bgUrl, setBgUrl] = useState<string>("");
   const [imgLoading, setImgLoading] = useState(true);
@@ -65,51 +56,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiType]);
 
-  const handleFileUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (file.type !== "application/json") {
-      setError("请选择JSON格式的文件");
-      return;
-    }
-
-    setIsLoading(true);
-    setError("");
-
-    try {
-      const text = await file.text();
-      const jsonData = JSON.parse(text);
-      const dataProcessor = new CommentDataProcessor(jsonData);
-      setData(jsonData);
-      setProcessor(dataProcessor);
-    } catch (err) {
-      setError(
-        "文件格式错误或数据处理失败: " +
-          (err instanceof Error ? err.message : String(err))
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleReset = () => {
-    setData(null);
-    setProcessor(null);
-    setError("");
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  if (data && processor) {
-    return (
-      <VisualizationComponent processor={processor} onReset={handleReset} />
-    );
-  }
-
   return (
     <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden">
       {/* 背景图片虚化和渐变遮罩 */}
@@ -136,81 +82,73 @@ export default function Home() {
       </div>
 
       {/* 顶部中央标题卡片 */}
-      <div className="absolute top-10 left-1/2 -translate-x-1/2 z-30 w-[480px] max-w-[90vw]">
+      <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 w-[520px] max-w-[90vw]">
         <div
-          className="bg-white/80 rounded-2xl shadow-2xl px-8 py-4 text-center border border-white/60 backdrop-blur-md ring-2 ring-blue-200/40 ring-offset-2 animate-fade-in drop-shadow-xl"
-          style={{ boxShadow: "0 0 32px 0 #a5b4fc55" }}
+          className="bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl px-10 py-6 text-center border border-white/60 ring-2 ring-blue-200/40 ring-offset-2 animate-fade-in drop-shadow-xl"
+          style={{ boxShadow: "0 0 40px 0 #a5b4fc66" }}
         >
           <h1
-            className="font-kosugi text-3xl md:text-4xl font-bold text-gray-900 tracking-wide drop-shadow-lg"
+            className="font-kosugi text-4xl md:text-5xl font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent tracking-wide drop-shadow-lg"
             style={{ textShadow: "0 2px 8px #a5b4fc66" }}
           >
             Bilibili评论可视化系统
           </h1>
+          <p className="text-gray-600 mt-3 font-medium">
+            智能分析 • 数据洞察 • 可视化呈现
+          </p>
         </div>
       </div>
 
       {/* 左下角四个菱形按钮组 */}
-      <div className="font-kosugi absolute bottom-10 left-10 z-30 flex flex-col items-center">
-        <div className="relative w-60 h-60">
-          {/* 文件上传按钮（可用）- 顶部 */}
+      <div className="font-kosugi absolute bottom-12 left-12 z-30 flex flex-col items-center">
+        <div className="relative w-64 h-64">
+          {/* 数据分析按钮（可用）- 顶部 */}
           <div className="absolute left-1/2 top-0 -translate-x-1/2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json"
-              onChange={handleFileUpload}
-              className="hidden"
-              id="file-input"
-            />
-            <label
-              htmlFor="file-input"
-              className={`flex items-center justify-center w-24 h-24 bg-gradient-to-br from-pink-400 via-blue-400 to-purple-400 text-white font-bold text-base shadow-2xl border-2 border-white/60 cursor-pointer transition-all select-none rounded-xl rotate-45 ring-4 ring-blue-300/40 hover:scale-110 hover:brightness-110 hover:ring-pink-300/60 active:scale-95 animate-fade-in-slow ${
-                isLoading
-                  ? "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
-                  : "hover:shadow-pink-200/60"
-              }`}
-              style={{
-                position: "relative",
-                boxShadow: "0 0 24px 0 #a5b4fc55, 0 0 8px 2px #f472b655",
-              }}
-            >
-              <span className="-rotate-45 tracking-wide drop-shadow">
-                {isLoading ? "处理中..." : "文件上传"}
-              </span>
-            </label>
+            <Link href="/visualization">
+              <button
+                className="flex items-center justify-center w-28 h-28 bg-gradient-to-br from-blue-500 via-purple-500 to-indigo-600 text-white font-bold text-lg shadow-2xl border-2 border-white/60 cursor-pointer transition-all select-none rounded-2xl rotate-45 ring-4 ring-blue-300/40 hover:scale-110 hover:brightness-110 hover:ring-purple-300/60 active:scale-95 animate-fade-in-slow hover:shadow-purple-200/60"
+                style={{
+                  position: "relative",
+                  boxShadow: "0 0 32px 0 #a5b4fc66, 0 0 12px 4px #f472b666",
+                }}
+              >
+                <span className="-rotate-45 tracking-wide drop-shadow-lg font-semibold">
+                  数据分析
+                </span>
+              </button>
+            </Link>
           </div>
           {/* 一站式爬取 - 右侧 */}
           <div className="absolute right-0 top-1/2 -translate-y-1/2">
             <Link href="/crawler">
-            <button
-                className="flex items-center justify-center w-24 h-24 bg-gradient-to-br from-blue-400 via-purple-400 to-pink-400 text-white font-bold text-base shadow-2xl border-2 border-white/60 cursor-pointer rounded-xl rotate-45 select-none hover:scale-110 hover:brightness-110 hover:ring-pink-300/60 active:scale-95 transition-all animate-fade-in-slow"
+              <button
+                className="flex items-center justify-center w-28 h-28 bg-gradient-to-br from-green-500 via-teal-500 to-cyan-600 text-white font-bold text-lg shadow-2xl border-2 border-white/60 cursor-pointer rounded-2xl rotate-45 select-none hover:scale-110 hover:brightness-110 hover:ring-teal-300/60 active:scale-95 transition-all animate-fade-in-slow ring-4 ring-green-300/40"
                 style={{ 
-                  boxShadow: "0 0 24px 0 #a5b4fc55, 0 0 8px 2px #f472b655",
+                  boxShadow: "0 0 32px 0 #10b98166, 0 0 12px 4px #06b6d466",
                 }}
-            >
-                <span className="-rotate-45 tracking-wide drop-shadow">一站式爬取</span>
-            </button>
+              >
+                <span className="-rotate-45 tracking-wide drop-shadow-lg font-semibold">一站式爬取</span>
+              </button>
             </Link>
           </div>
           {/* 尽请期待1 - 底部 */}
           <div className="absolute left-1/2 bottom-0 -translate-x-1/2">
             <button
               disabled
-              className="flex items-center justify-center w-24 h-24 bg-gradient-to-br from-blue-200 via-pink-200 to-purple-200 text-purple-400 font-bold text-base shadow-xl border-2 border-white/60 cursor-not-allowed rounded-xl rotate-45 select-none opacity-80 hover:scale-105 transition-all animate-fade-in-slow"
-              style={{ boxShadow: "0 0 12px 0 #f472b633" }}
+              className="flex items-center justify-center w-28 h-28 bg-gradient-to-br from-gray-300 via-gray-400 to-gray-500 text-gray-600 font-bold text-lg shadow-xl border-2 border-white/60 cursor-not-allowed rounded-2xl rotate-45 select-none opacity-70 hover:scale-105 transition-all animate-fade-in-slow"
+              style={{ boxShadow: "0 0 20px 0 #6b728066" }}
             >
-              <span className="-rotate-45 tracking-wide">尽请期待</span>
+              <span className="-rotate-45 tracking-wide font-semibold">尽请期待</span>
             </button>
           </div>
           {/* 尽请期待2 - 左侧 */}
           <div className="absolute left-0 top-1/2 -translate-y-1/2">
             <button
               disabled
-              className="flex items-center justify-center w-24 h-24 bg-gradient-to-br from-purple-200 via-blue-200 to-pink-200 text-pink-400 font-bold text-base shadow-xl border-2 border-white/60 cursor-not-allowed rounded-xl rotate-45 select-none opacity-80 hover:scale-105 transition-all animate-fade-in-slow"
-              style={{ boxShadow: "0 0 12px 0 #a5b4fc33" }}
+              className="flex items-center justify-center w-28 h-28 bg-gradient-to-br from-gray-300 via-gray-400 to-gray-500 text-gray-600 font-bold text-lg shadow-xl border-2 border-white/60 cursor-not-allowed rounded-2xl rotate-45 select-none opacity-70 hover:scale-105 transition-all animate-fade-in-slow"
+              style={{ boxShadow: "0 0 20px 0 #6b728066" }}
             >
-              <span className="-rotate-45 tracking-wide">尽请期待</span>
+              <span className="-rotate-45 tracking-wide font-semibold">尽请期待</span>
             </button>
           </div>
         </div>
@@ -218,14 +156,17 @@ export default function Home() {
 
       {/* 右下角图片源选择卡片 */}
       <div
-        className="absolute bottom-10 right-10 z-30 flex items-center space-x-2 bg-white/80 rounded-2xl shadow-xl px-5 py-3 backdrop-blur border border-white/60 ring-2 ring-blue-200/40 hover:ring-pink-200/60 transition-all animate-fade-in-slow"
-        style={{ boxShadow: "0 0 16px 0 #a5b4fc33" }}
+        className="absolute bottom-12 right-12 z-30 flex items-center space-x-3 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl px-6 py-4 border border-white/60 ring-2 ring-blue-200/30 hover:ring-purple-200/50 transition-all animate-fade-in-slow"
+        style={{ boxShadow: "0 0 24px 0 #a5b4fc44" }}
       >
-        <span className="text-sm text-gray-700 font-medium">图片源</span>
+        <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <span className="text-sm text-gray-700 font-semibold">图片源</span>
         <select
           value={apiType}
           onChange={(e) => setApiType(e.target.value as "bing" | "acg")}
-          className="text-sm px-3 py-1 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white/90 shadow hover:bg-pink-50 transition-all"
+          className="text-sm px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white/90 shadow-sm hover:bg-purple-50 transition-all font-medium"
         >
           {IMAGE_APIS.map((api) => (
             <option key={api.value} value={api.value}>
@@ -235,19 +176,12 @@ export default function Home() {
         </select>
         <button
           onClick={() => fetchDailyImage()}
-          className="font-kosugi ml-2 px-3 py-1 bg-gradient-to-r from-pink-400 via-blue-400 to-purple-400 hover:from-pink-500 hover:to-blue-500 text-white rounded-lg shadow font-semibold text-xs transition-all ring-2 ring-blue-200/40 hover:ring-pink-300/60"
+          className="font-kosugi ml-2 px-4 py-2 bg-gradient-to-r from-blue-500 via-purple-500 to-indigo-500 hover:from-blue-600 hover:via-purple-600 hover:to-indigo-600 text-white rounded-xl shadow-lg font-semibold text-sm transition-all ring-2 ring-blue-200/40 hover:ring-purple-300/60 hover:scale-105"
           style={{ textShadow: "0 1px 4px #a5b4fc88" }}
         >
           换一张
         </button>
       </div>
-
-      {/* 错误提示 */}
-      {error && (
-        <div className="absolute top-32 left-1/2 -translate-x-1/2 z-40 w-[360px] max-w-[90vw] mb-4 p-4 bg-pink-50 border border-pink-200 rounded-lg shadow animate-fade-in">
-          <p className="text-pink-700 text-sm text-center">{error}</p>
-        </div>
-      )}
     </div>
   );
 }
