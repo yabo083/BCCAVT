@@ -140,7 +140,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
     });
   }, [processor]);
 
-  // 聚类高亮函数
+  // 聚类高亮函数 - 保留用于主组件的其他功能
   const highlightCluster = useCallback(
     (mode: "radial" | "linear" | "isolated" | null) => {
       if (!svgRef.current || !clusterData) return;
@@ -285,10 +285,71 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
     [clusterData]
   );
 
-  // 更新聚类模式时触发高亮
-  useEffect(() => {
-    highlightCluster(clusterMode);
-  }, [clusterMode, highlightCluster]);
+  // 3. 通用高亮控制函数
+  const applyHighlight = useCallback((type: "reset" | "cluster" | "search" | "locate", options?: {
+    clusterMode?: "radial" | "linear" | "isolated" | null;
+    searchResults?: GraphNode[];
+    targetNodeId?: string;
+  }) => {
+    if (!svgRef.current) return;
+    
+    const svg = d3.select(svgRef.current);
+    
+    // 首先重置所有样式
+    svg
+      .selectAll<SVGCircleElement, GraphNode>(".node circle")
+      .attr("fill", "#69b3a2")
+      .attr("r", (d) => Math.min(Math.sqrt(d.likes) + 3, 15))
+      .attr("stroke", "#fff")
+      .attr("stroke-width", 1.5);
+
+    svg
+      .selectAll<SVGLineElement, GraphLink>(".links line")
+      .attr("stroke", "#999")
+      .attr("stroke-opacity", 0.6)
+      .attr("stroke-width", 1);
+
+    if (type === "reset") return;
+
+    // 根据类型应用特定的高亮
+    if (type === "cluster" && options?.clusterMode && clusterData) {
+      highlightCluster(options.clusterMode);
+    } else if (type === "search" && options?.searchResults) {
+      // 高亮搜索结果
+      svg
+        .selectAll<SVGCircleElement, GraphNode>(".node circle")
+        .attr("fill", (d) =>
+          options.searchResults!.some((t) => t.id === d.id) ? "#ff6b6b" : "#ddd"
+        )
+        .attr("r", (d) =>
+          options.searchResults!.some((t) => t.id === d.id)
+            ? 20
+            : Math.min(Math.sqrt(d.likes) + 3, 15)
+        );
+    } else if (type === "locate" && options?.targetNodeId) {
+      // 特别标记目标节点
+      if (clusterMode) {
+        // 如果处于聚类模式，重新应用聚类高亮
+        highlightCluster(clusterMode);
+        // 然后特别标记目标节点
+        svg
+          .selectAll<SVGCircleElement, GraphNode>(".node circle")
+          .filter((d: GraphNode) => d.id === options.targetNodeId)
+          .attr("stroke", "#ff0000")
+          .attr("stroke-width", 3);
+      } else {
+        // 如果不在聚类模式，使用临时高亮
+        svg
+          .selectAll<SVGCircleElement, GraphNode>(".node circle")
+          .attr("fill", (d) => (d.id === options.targetNodeId ? "#ff6b6b" : "#69b3a2"))
+          .attr("r", (d) =>
+            d.id === options.targetNodeId ? 20 : Math.min(Math.sqrt(d.likes) + 3, 15)
+          );
+      }
+    }
+  }, [svgRef, clusterData, clusterMode, highlightCluster]);
+
+  // 更新聚类模式时触发高亮 - 现在由handleClusterMode处理
 
   // 搜索功能实现
   const handleSearch = useCallback(() => {
@@ -303,52 +364,30 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
       return;
     }
 
-    // 高亮搜索结果
-    if (svgRef.current) {
-      const svg = d3.select(svgRef.current);
+    // 使用统一的高亮函数
+    applyHighlight("search", { searchResults: targetNodes });
 
-      // 重置所有节点样式
-      svg
-        .selectAll<SVGCircleElement, GraphNode>(".node circle")
-        .attr("fill", "#69b3a2")
-        .attr("r", (d) => Math.min(Math.sqrt(d.likes) + 3, 15))
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 1.5);
+    // 定位到第一个匹配的节点（内联定位逻辑）
+    if (targetNodes.length > 0) {
+      const nodeId = targetNodes[0].id;
+      const node = nodes.find((n) => n.id === nodeId);
+      if (node && zoomRef.current && containerRef.current) {
+        const containerRect = containerRef.current.getBoundingClientRect();
+        const scale = 2;
+        const x = containerRect.width / 2 - (node.x || 0) * scale;
+        const y = containerRect.height / 2 - (node.y || 0) * scale;
 
-      // 高亮搜索结果
-      svg
-        .selectAll<SVGCircleElement, GraphNode>(".node circle")
-        .attr("fill", (d) =>
-          targetNodes.some((t) => t.id === d.id) ? "#ff6b6b" : "#ddd"
-        )
-        .attr("r", (d) =>
-          targetNodes.some((t) => t.id === d.id)
-            ? 20
-            : Math.min(Math.sqrt(d.likes) + 3, 15)
-        );
-
-      // 定位到第一个匹配的节点
-      if (targetNodes.length > 0) {
-        // 使用内联的定位逻辑避免循环依赖
-        const nodeId = targetNodes[0].id;
-        const node = nodes.find((n) => n.id === nodeId);
-        if (node && zoomRef.current && containerRef.current) {
-          const containerRect = containerRef.current.getBoundingClientRect();
-          const scale = 2;
-          const x = containerRect.width / 2 - (node.x || 0) * scale;
-          const y = containerRect.height / 2 - (node.y || 0) * scale;
-
-          svg
-            .transition()
-            .duration(750)
-            .call(
-              zoomRef.current.transform,
-              d3.zoomIdentity.translate(x, y).scale(scale)
-            );
-        }
+        const svg = d3.select(svgRef.current!);
+        svg
+          .transition()
+          .duration(750)
+          .call(
+            zoomRef.current.transform,
+            d3.zoomIdentity.translate(x, y).scale(scale)
+          );
       }
     }
-  }, [searchQuery, nodes]);
+  }, [searchQuery, nodes, applyHighlight, svgRef, containerRef, zoomRef]);
 
   // 度数筛选功能
   const handleDegreeFilter = useCallback(() => {
@@ -380,22 +419,11 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
 
   // 重置可视化
   const handleVisualizationReset = useCallback(() => {
+    // 使用统一的高亮函数重置样式
+    applyHighlight("reset");
+
     if (svgRef.current) {
       const svg = d3.select(svgRef.current);
-
-      // 重置所有节点和连接样式
-      svg
-        .selectAll<SVGCircleElement, GraphNode>(".node circle")
-        .attr("fill", "#69b3a2")
-        .attr("r", (d) => Math.min(Math.sqrt(d.likes) + 3, 15))
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 1.5);
-
-      svg
-        .selectAll<SVGLineElement, GraphLink>(".links line")
-        .attr("stroke", "#999")
-        .attr("stroke-opacity", 0.6)
-        .attr("stroke-width", 1);
 
       // 显示所有节点和连接
       svg.selectAll(".node").style("display", null);
@@ -421,7 +449,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
     setClusterMode(null);
     setSearchQuery("");
     setIsRankingOpen(false);
-  }, []);
+  }, [applyHighlight, svgRef, zoomRef, containerRef]);
 
   // 全屏功能
   const handleFullscreen = () => {
@@ -440,15 +468,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
       const node = nodes.find((n) => n.id === nodeId);
       if (!node) return;
 
-      const svg = d3.select(svgRef.current);
-
       console.log(`定位节点: ${nodeId} (${node.name}), 聚类模式: ${clusterMode}`);
-
-      // 清除之前的所有红色边框高亮
-      svg
-        .selectAll<SVGCircleElement, GraphNode>(".node circle")
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 1.5);
 
       // 计算新的变换以将节点居中
       const containerRect = containerRef.current?.getBoundingClientRect();
@@ -459,6 +479,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
       const y = containerRect.height / 2 - (node.y || 0) * scale;
 
       // 应用变换
+      const svg = d3.select(svgRef.current);
       svg
         .transition()
         .duration(750)
@@ -469,34 +490,10 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
 
       // 延迟应用高亮，确保zoom变换完成
       setTimeout(() => {
-        if (!svgRef.current) return;
-        const svg = d3.select(svgRef.current);
-        
-        // 高亮节点 - 保持聚类状态或使用临时高亮
-        if (clusterMode) {
-          // 如果处于聚类模式，重新应用聚类高亮并特别标记目标节点
-          highlightCluster(clusterMode);
-          
-          // 在聚类高亮的基础上，给目标节点额外的强调
-          svg
-            .selectAll<SVGCircleElement, GraphNode>(".node circle")
-            .filter((d: GraphNode) => d.id === nodeId)
-            .attr("stroke", "#ff0000")
-            .attr("stroke-width", 3);
-        } else {
-          // 如果不在聚类模式，使用临时高亮
-          svg
-            .selectAll<SVGCircleElement, GraphNode>(".node circle")
-            .transition()
-            .duration(300)
-            .attr("fill", (d) => (d.id === nodeId ? "#ff6b6b" : "#69b3a2"))
-            .attr("r", (d) =>
-              d.id === nodeId ? 20 : Math.min(Math.sqrt(d.likes) + 3, 15)
-            );
-        }
+        applyHighlight("locate", { targetNodeId: nodeId });
       }, 800); // 等待zoom动画完成
     },
-    [nodes, clusterMode, highlightCluster]
+    [nodes, clusterMode, applyHighlight, svgRef, zoomRef, containerRef]
   );
 
   // 专研按钮逻辑
@@ -531,8 +528,8 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
   const handleClusterMode = useCallback((mode: "radial" | "linear" | "isolated") => {
     const newMode = clusterMode === mode ? null : mode;
     setClusterMode(newMode);
-    highlightCluster(newMode);
-  }, [clusterMode, highlightCluster]);
+    // 移除这里的applyHighlight调用，让VisualizationCanvas自己处理
+  }, [clusterMode]);
 
   // 优化折叠/展开逻辑
   const handleTogglePanel = () => {
@@ -578,6 +575,8 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
         clusterData={clusterData}
         simulationRef={simulationRef}
         zoomRef={zoomRef}
+        svgRef={svgRef}
+        containerRef={containerRef}
         findConnectedComponent={findConnectedComponent}
       />
 

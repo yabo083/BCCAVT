@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useEffect } from "react";
+import React, { useEffect } from "react";
 import * as d3 from "d3";
 import { GraphNode, GraphLink } from "@/types/comment";
 
@@ -23,6 +23,8 @@ interface VisualizationCanvasProps {
   };
   simulationRef: React.MutableRefObject<d3.Simulation<GraphNode, GraphLink> | null>;
   zoomRef: React.MutableRefObject<d3.ZoomBehavior<SVGSVGElement, unknown> | null>;
+  svgRef: React.MutableRefObject<SVGSVGElement | null>;
+  containerRef: React.MutableRefObject<HTMLDivElement | null>;
   findConnectedComponent: (startId: string) => Set<string>;
 }
 
@@ -37,10 +39,10 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
   clusterData,
   simulationRef,
   zoomRef,
+  svgRef,
+  containerRef,
   findConnectedComponent,
 }) => {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   // D3 可视化逻辑
   useEffect(() => {
@@ -232,12 +234,6 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
             const svg = d3.select(svgRef.current);
             const containerRect = containerRef.current.getBoundingClientRect();
             
-            // 清除之前的所有红色边框高亮
-            svg
-              .selectAll<SVGCircleElement, GraphNode>(".node circle")
-              .attr("stroke", "#fff")
-              .attr("stroke-width", 1.5);
-
             // 计算新的变换以将节点居中
             const scale = 2;
             const x = containerRect.width / 2 - (d.x || 0) * scale;
@@ -252,13 +248,14 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
                 d3.zoomIdentity.translate(x, y).scale(scale)
               );
 
-            // 延迟应用高亮，确保zoom变换完成
+            // 延迟应用高亮，确保zoom变换完成，并且使用当前的聚类模式
+            const currentClusterMode = clusterMode; // 保存当前聚类模式状态
             setTimeout(() => {
               if (!svgRef.current) return;
               const svg = d3.select(svgRef.current);
               
-              // 重新应用聚类高亮逻辑
-              switch (clusterMode) {
+              // 重新应用聚类高亮逻辑（使用保存的状态）
+              switch (currentClusterMode) {
                 case "radial":
                   if (clusterData?.radial) {
                     svg
@@ -275,6 +272,31 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
                           ? 20
                           : Math.min(Math.sqrt(node.likes) + 3, 15)
                       );
+
+                    // 高亮连接
+                    svg
+                      .selectAll<SVGLineElement, GraphLink>(".links line")
+                      .attr("stroke", (l) =>
+                        clusterData.radial?.links.some(
+                          (link) => link.source === l.source && link.target === l.target
+                        )
+                          ? "#ff6b6b"
+                          : "#ddd"
+                      )
+                      .attr("stroke-opacity", (l) =>
+                        clusterData.radial?.links.some(
+                          (link) => link.source === l.source && link.target === l.target
+                        )
+                          ? 1
+                          : 0.2
+                      )
+                      .attr("stroke-width", (l) =>
+                        clusterData.radial?.links.some(
+                          (link) => link.source === l.source && link.target === l.target
+                        )
+                          ? 2
+                          : 1
+                      );
                   }
                   break;
                 case "linear":
@@ -284,12 +306,41 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
                         chain.nodes.map((n) => n.id)
                       )
                     );
+
+                    const chainLinks = new Set<string>();
+                    clusterData.linear.chains.forEach((chain) => {
+                      chain.links.forEach((l) => {
+                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                        chainLinks.add(`${sourceId}-${targetId}`);
+                        chainLinks.add(`${targetId}-${sourceId}`);
+                      });
+                    });
+
                     svg
                       .selectAll<SVGCircleElement, GraphNode>(".node circle")
                       .attr("fill", (node) => (chainNodes.has(node.id) ? "#4ecdc4" : "#ddd"))
                       .attr("r", (node) =>
                         chainNodes.has(node.id) ? 12 : Math.min(Math.sqrt(node.likes) + 3, 15)
                       );
+
+                    svg
+                      .selectAll<SVGLineElement, GraphLink>(".links line")
+                      .attr("stroke", (l) => {
+                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                        return chainLinks.has(`${sourceId}-${targetId}`) ? "#4ecdc4" : "#ddd";
+                      })
+                      .attr("stroke-opacity", (l) => {
+                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                        return chainLinks.has(`${sourceId}-${targetId}`) ? 1 : 0.2;
+                      })
+                      .attr("stroke-width", (l) => {
+                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                        return chainLinks.has(`${sourceId}-${targetId}`) ? 2 : 1;
+                      });
                   }
                   break;
                 case "isolated":
@@ -307,6 +358,12 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
                           ? 12
                           : Math.min(Math.sqrt(node.likes) + 3, 15)
                       );
+
+                    svg
+                      .selectAll<SVGLineElement, GraphLink>(".links line")
+                      .attr("stroke", "#ddd")
+                      .attr("stroke-opacity", 0.2)
+                      .attr("stroke-width", 1);
                   }
                   break;
               }
@@ -379,7 +436,150 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [nodes, links, isFocusMode, focusNodeId, isModalOpen, clusterMode, clusterData, onNodeClick, findConnectedComponent, simulationRef, zoomRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, links, isFocusMode, focusNodeId, onNodeClick, findConnectedComponent, simulationRef, zoomRef, containerRef, svgRef]);
+
+  // 单独的effect处理聚类高亮，避免重新创建仿真
+  useEffect(() => {
+    if (!svgRef.current || !clusterData) return;
+    
+    const svg = d3.select(svgRef.current);
+    
+    // 应用聚类高亮
+    if (clusterMode) {
+      switch (clusterMode) {
+        case "radial":
+          if (clusterData.radial) {
+            // 高亮中心节点
+            svg
+              .selectAll<SVGCircleElement, GraphNode>(".node circle")
+              .attr("fill", (d) =>
+                clusterData.radial?.centers.some((c) => c.id === d.id)
+                  ? "#ff6b6b"
+                  : clusterData.radial?.children.get(d.id)?.length
+                  ? "#4ecdc4"
+                  : "#ddd"
+              )
+              .attr("r", (d) =>
+                clusterData.radial?.centers.some((c) => c.id === d.id)
+                  ? 20
+                  : Math.min(Math.sqrt(d.likes) + 3, 15)
+              );
+
+            // 高亮连接
+            svg
+              .selectAll<SVGLineElement, GraphLink>(".links line")
+              .attr("stroke", (l) =>
+                clusterData.radial?.links.some(
+                  (link) => link.source === l.source && link.target === l.target
+                )
+                  ? "#ff6b6b"
+                  : "#ddd"
+              )
+              .attr("stroke-opacity", (l) =>
+                clusterData.radial?.links.some(
+                  (link) => link.source === l.source && link.target === l.target
+                )
+                  ? 1
+                  : 0.2
+              )
+              .attr("stroke-width", (l) =>
+                clusterData.radial?.links.some(
+                  (link) => link.source === l.source && link.target === l.target
+                )
+                  ? 2
+                  : 1
+              );
+          }
+          break;
+
+        case "linear":
+          if (clusterData.linear) {
+            const chainNodes = new Set(
+              clusterData.linear.chains.flatMap((chain) =>
+                chain.nodes.map((n) => n.id)
+              )
+            );
+
+            // 修复链接识别逻辑，支持双向匹配
+            const chainLinks = new Set<string>();
+            clusterData.linear.chains.forEach((chain) => {
+              chain.links.forEach((l) => {
+                const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                chainLinks.add(`${sourceId}-${targetId}`);
+                chainLinks.add(`${targetId}-${sourceId}`);
+              });
+            });
+
+            svg
+              .selectAll<SVGCircleElement, GraphNode>(".node circle")
+              .attr("fill", (d) => (chainNodes.has(d.id) ? "#4ecdc4" : "#ddd"))
+              .attr("r", (d) =>
+                chainNodes.has(d.id) ? 12 : Math.min(Math.sqrt(d.likes) + 3, 15)
+              );
+
+            svg
+              .selectAll<SVGLineElement, GraphLink>(".links line")
+              .attr("stroke", (l) => {
+                const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                return chainLinks.has(`${sourceId}-${targetId}`) ? "#4ecdc4" : "#ddd";
+              })
+              .attr("stroke-opacity", (l) => {
+                const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                return chainLinks.has(`${sourceId}-${targetId}`) ? 1 : 0.2;
+              })
+              .attr("stroke-width", (l) => {
+                const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
+                const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
+                return chainLinks.has(`${sourceId}-${targetId}`) ? 2 : 1;
+              });
+          }
+          break;
+
+        case "isolated":
+          if (clusterData.isolated) {
+            const isolatedNodeIds = new Set(
+              clusterData.isolated.nodes.map((n) => n.id)
+            );
+
+            svg
+              .selectAll<SVGCircleElement, GraphNode>(".node circle")
+              .attr("fill", (d) =>
+                isolatedNodeIds.has(d.id) ? "#ffd93d" : "#ddd"
+              )
+              .attr("r", (d) =>
+                isolatedNodeIds.has(d.id)
+                  ? 12
+                  : Math.min(Math.sqrt(d.likes) + 3, 15)
+              );
+
+            svg
+              .selectAll<SVGLineElement, GraphLink>(".links line")
+              .attr("stroke", "#ddd")
+              .attr("stroke-opacity", 0.2)
+              .attr("stroke-width", 1);
+          }
+          break;
+      }
+    } else {
+      // 重置到默认样式
+      svg
+        .selectAll<SVGCircleElement, GraphNode>(".node circle")
+        .attr("fill", "#69b3a2")
+        .attr("r", (d) => Math.min(Math.sqrt(d.likes) + 3, 15))
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 1.5);
+
+      svg
+        .selectAll<SVGLineElement, GraphLink>(".links line")
+        .attr("stroke", "#999")
+        .attr("stroke-opacity", 0.6)
+        .attr("stroke-width", 1);
+    }
+  }, [clusterMode, clusterData, svgRef]);
 
   return (
     <div ref={containerRef} className="flex-1 relative overflow-hidden">
