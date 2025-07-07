@@ -3,39 +3,19 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 
-// 支持的图片API
-const IMAGE_APIS = [
-  {
-    label: "Bing每日",
-    value: "bing",
-    url: "https://api.vvhan.com/api/bing?type=json",
-  },
-  {
-    label: "二次元",
-    value: "acg",
-    url: "https://api.vvhan.com/api/wallpaper/acg?type=json",
-  },
-  {
-    label: "PC壁纸",
-    value: "pcGirl",
-    url: "https://api.vvhan.com/api/wallpaper/pcGirl?type=json",
-  },
-  // {
-  //   label: "PC壁纸（新）",
-  //   value: "pcGirlNew",
-  //   url: "https://api.btstu.cn/sjbz/api.php?format=json",
-  // },
-  {
-    label: "p站",
-    value: "pixiv",
-    url: "/api/pixiv",
-  },
-];
-
 export default function Home() {
-  // 新增：每日图片
+  // 支持的图片API选项
+  const IMAGE_API_OPTIONS = [
+    { label: "Bing每日", value: "bing" },
+    { label: "二次元", value: "acg" },
+    { label: "PC壁纸", value: "pcGirl" },
+    { label: "p站", value: "pixiv" },
+  ];
+  // 背景图片状态管理 - 支持LQIP
   const [bgUrl, setBgUrl] = useState<string>("");
-  const [imgLoading, setImgLoading] = useState(true);
+  const [placeholderUrl, setPlaceholderUrl] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isPlaceholderLoaded, setIsPlaceholderLoaded] = useState(false);
 
   const [apiType, setApiType] = useState<"bing" | "acg" | "pcGirl" | "pixiv">(
     "bing"
@@ -43,7 +23,7 @@ export default function Home() {
   const [isInitialized, setIsInitialized] = useState(false);
 
   // 图片缓存key
-  const getCacheKey = (type: string) => `bg_image_cache_${type}`;
+  const getCacheKey = (type: string, size: 'regular' | 'thumb') => `bg_image_cache_${type}_${size}`;
 
   // 保存用户选择的API类型
   const saveApiType = (type: string) => {
@@ -73,21 +53,29 @@ export default function Home() {
   // 从缓存加载图片
   const loadFromCache = (type: string) => {
     try {
-      const cacheKey = getCacheKey(type);
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const { url, timestamp } = JSON.parse(cached);
+      const regularCacheKey = getCacheKey(type, 'regular');
+      const thumbCacheKey = getCacheKey(type, 'thumb');
+      
+      const regularCached = localStorage.getItem(regularCacheKey);
+      const thumbCached = localStorage.getItem(thumbCacheKey);
+      
+      if (regularCached && thumbCached) {
+        const { url: regularUrl, timestamp: regularTimestamp } = JSON.parse(regularCached);
+        const { url: thumbUrl, timestamp: thumbTimestamp } = JSON.parse(thumbCached);
         const now = Date.now();
         const cacheExpiry = 24 * 60 * 60 * 1000; // 24小时过期
 
-        if (now - timestamp < cacheExpiry) {
-          console.log("[loadFromCache] 从缓存加载图片:", url);
-          setBgUrl(url);
-          setImgLoading(false);
+        if (now - regularTimestamp < cacheExpiry && now - thumbTimestamp < cacheExpiry) {
+          console.log("[loadFromCache] 从缓存加载图片:", { regularUrl, thumbUrl });
+          setPlaceholderUrl(thumbUrl);
+          setBgUrl(regularUrl);
+          setIsLoading(false);
+          setIsPlaceholderLoaded(true);
           return true;
         } else {
           // 缓存过期，删除
-          localStorage.removeItem(cacheKey);
+          localStorage.removeItem(regularCacheKey);
+          localStorage.removeItem(thumbCacheKey);
           console.log("[loadFromCache] 缓存已过期，已删除");
         }
       }
@@ -98,15 +86,18 @@ export default function Home() {
   };
 
   // 保存到缓存
-  const saveToCache = (type: string, url: string) => {
+  const saveToCache = (type: string, regularUrl: string, thumbUrl: string) => {
     try {
-      const cacheKey = getCacheKey(type);
-      const cacheData = {
-        url,
-        timestamp: Date.now(),
-      };
-      localStorage.setItem(cacheKey, JSON.stringify(cacheData));
-      console.log("[saveToCache] 图片已缓存:", url);
+      const regularCacheKey = getCacheKey(type, 'regular');
+      const thumbCacheKey = getCacheKey(type, 'thumb');
+      const timestamp = Date.now();
+      
+      const regularCacheData = { url: regularUrl, timestamp };
+      const thumbCacheData = { url: thumbUrl, timestamp };
+      
+      localStorage.setItem(regularCacheKey, JSON.stringify(regularCacheData));
+      localStorage.setItem(thumbCacheKey, JSON.stringify(thumbCacheData));
+      console.log("[saveToCache] 图片已缓存:", { regularUrl, thumbUrl });
     } catch (e) {
       console.error("[saveToCache] 保存缓存失败:", e);
     }
@@ -140,62 +131,50 @@ export default function Home() {
     }
   };
 
-  // 获取每日图片（支持缓存）
+  // 获取每日图片（支持LQIP和缓存）
   const fetchDailyImage = async (type = apiType, forceRefresh = false) => {
-    setImgLoading(true);
+    setIsLoading(true);
+    setIsPlaceholderLoaded(false);
+    setBgUrl("");
+    setPlaceholderUrl("");
 
     // 如果不是强制刷新，先尝试从缓存加载
     if (!forceRefresh && loadFromCache(type)) {
       return;
     }
 
-    const api = IMAGE_APIS.find((a) => a.value === type) || IMAGE_APIS[0];
     try {
-      console.log("[fetchDailyImage] 请求API:", api.url);
-      const res = await fetch(api.url);
+      console.log("[fetchDailyImage] 请求API代理:", `/api/image-proxy?type=${type}`);
+      const res = await fetch(`/api/image-proxy?type=${type}`);
       const data = await res.json();
-      console.log("[fetchDailyImage] API响应:", data);
-      // 兼容多种API格式，添加安全检查
-      let url = "";
+      console.log("[fetchDailyImage] API代理响应:", data);
 
-      // 使用switch语句确定API返回的图片URL格式
-      switch (true) {
-        // 方式1: 直接的url字段
-        case !!data.url:
-          url = data.url;
-          break;
-        // 方式2: imgurl字段
-        case !!data.imgurl:
-          url = data.imgurl;
-          break;
-        // 方式3: data.url嵌套结构
-        case !!(data.data && data.data.url):
-          url = data.data.url;
-          break;
-        // 方式4: pixiv API
-        case !!data.data[0].urls.regular:
-          url = data.data[0].urls.regular;
-          console.log("[fetchDailyImage] 使用pixiv API格式，提取图片URL:", url);
-          break;
-        default:
-          console.log("还真没有匹配到任何图片URL格式");
-          url = "";
-          break;
+      if (data.error) {
+        console.error("[fetchDailyImage] API代理返回错误:", data.error);
+        setBgUrl("");
+        setPlaceholderUrl("");
+        return;
       }
 
-      if (url) {
-        setBgUrl(url);
-        saveToCache(type, url); // 保存到缓存
-        console.log("[fetchDailyImage] 设置图片url:", url);
+      const { regularUrl, thumbUrl } = data;
+
+      if (regularUrl && thumbUrl) {
+        // 先加载缩略图作为占位符
+        setPlaceholderUrl(thumbUrl);
+        setBgUrl(regularUrl);
+        saveToCache(type, regularUrl, thumbUrl); // 保存到缓存
+        console.log("[fetchDailyImage] 设置图片URLs:", { regularUrl, thumbUrl });
       } else {
-        console.warn("[fetchDailyImage] 无法从API响应中提取图片URL:", data);
+        console.warn("[fetchDailyImage] 无法从API代理响应中提取图片URL:", data);
         setBgUrl("");
+        setPlaceholderUrl("");
       }
     } catch (e) {
       console.error("[fetchDailyImage] 加载图片失败:", e);
       setBgUrl("");
+      setPlaceholderUrl("");
     } finally {
-      setImgLoading(false);
+      // 注意：这里不设置 setIsLoading(false)，因为我们需要等待高清图片加载完成
     }
   };
 
@@ -222,27 +201,51 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden">
+      {/* 背景图片系统 - LQIP实现 */}
+      {placeholderUrl && (
+        // 占位符图片 (模糊缩略图)
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={placeholderUrl}
+          alt="背景占位符"
+          className={`absolute inset-0 object-cover w-full h-full scale-105 transition-opacity duration-500 ${
+            isLoading && isPlaceholderLoaded ? "opacity-100" : "opacity-0"
+          }`}
+          style={{
+            filter: "blur(20px)",
+            zIndex: -21,
+          }}
+          onLoad={() => {
+            setIsPlaceholderLoaded(true);
+            console.log("占位符图片加载完成");
+          }}
+          onError={() => {
+            console.error("占位符图片加载失败:", placeholderUrl);
+            setIsPlaceholderLoaded(false);
+          }}
+        />
+      )}
+      
       {bgUrl && (
+        // 高清背景图片
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={bgUrl}
-          alt="每日图片"
-          className={`object-cover transition-opacity duration-700 scale-105 ${
-            imgLoading ? "opacity-0" : "opacity-100"
+          alt="背景图片"
+          className={`absolute inset-0 object-cover w-full h-full scale-105 transition-opacity duration-700 ${
+            isLoading ? "opacity-0" : "opacity-100"
           }`}
-          onLoad={() => setImgLoading(false)}
+          onLoad={() => {
+            setIsLoading(false);
+            console.log("高清图片加载完成");
+          }}
           onError={() => {
-            console.error("图片加载失败:", bgUrl);
-            setImgLoading(false);
+            console.error("高清图片加载失败:", bgUrl);
+            setIsLoading(false);
             // 可以在这里设置一个默认图片或清空
             setBgUrl("");
           }}
           style={{
-            minHeight: "100vh",
-            width: "100%",
-            height: "100%",
-            position: "absolute",
-            inset: 0,
             zIndex: -20,
           }}
         />
@@ -354,7 +357,7 @@ export default function Home() {
           onChange={(e) => setApiType(e.target.value as "bing" | "acg")}
           className="text-sm px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white/90 shadow-sm hover:bg-purple-50 transition-all font-medium"
         >
-          {IMAGE_APIS.map((api) => (
+          {IMAGE_API_OPTIONS.map((api) => (
             <option key={api.value} value={api.value}>
               {api.label}
             </option>
