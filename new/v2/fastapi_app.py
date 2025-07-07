@@ -256,8 +256,15 @@ async def get_task_status(task_id: str, request: Request):
         }
         
         if status == 'PENDING':
-            # 任务等待中
+            # 任务等待中 - 增加更详细的状态信息
             response_data["progress"] = "等待处理..."
+            
+            # 检查任务是否长时间停留在PENDING状态
+            try:
+                # 简单的时间检查逻辑（由于缺少准确的任务提交时间，暂时简化处理）
+                response_data["progress"] = "等待处理... (如果长时间无响应，请检查Worker是否正常运行)"
+            except Exception:
+                pass
             
         elif status == 'STARTED':
             # 任务已开始

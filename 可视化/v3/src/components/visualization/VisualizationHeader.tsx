@@ -42,7 +42,7 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
   }, [isMenuOpen]);
 
   return (
-    <div className="bg-white/95 backdrop-blur-xl shadow-sm border-b border-white/20 sticky top-0 z-30">
+    <div className="bg-white/95 backdrop-blur-xl shadow-sm border-b border-white/20 sticky top-0 z-50">
       <div className="flex items-center justify-between px-6 py-4">
         {/* 左侧标题和菜单 */}
         <div className="flex items-center space-x-4">
@@ -69,7 +69,7 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
 
             {/* 下拉菜单 */}
             {isMenuOpen && (
-              <div className="absolute top-12 left-0 bg-white/98 backdrop-blur-md rounded-xl shadow-2xl border border-gray-200/50 py-2 min-w-48 z-[110] animate-in slide-in-from-top-2 duration-200">
+              <div className="absolute top-12 left-0 bg-white/98 backdrop-blur-md rounded-xl shadow-2xl border border-gray-200/50 py-2 min-w-48 z-[9999] animate-in slide-in-from-top-2 duration-200">
                 <Link
                   href="/"
                   className="flex items-center px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
@@ -90,18 +90,6 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                   <span className="font-medium">新建分析</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onReset();
-                    setIsMenuOpen(false);
-                  }}
-                  className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
-                >
-                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-orange-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  <span className="font-medium">重置视图</span>
                 </button>
                 <hr className="my-2 border-gray-200/50" />
                 <Link
@@ -130,6 +118,17 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
           <div className="flex items-center bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/30 p-2 space-x-1">
             <span className="text-xs text-gray-500 px-3 py-1 font-medium">操作工具</span>
             <div className="w-px h-6 bg-gray-200"></div>
+            
+            <button
+              onClick={onReset}
+              className="group flex items-center space-x-2 px-4 py-2.5 bg-white hover:bg-blue-50 text-blue-600 rounded-xl transition-all duration-300 border border-transparent hover:border-blue-200/50 hover:shadow-md active:scale-95"
+              title="重置视图"
+            >
+              <svg className="w-4 h-4 transition-transform group-hover:rotate-180 duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span className="text-sm font-medium">重置</span>
+            </button>
             
             <button
               onClick={onFullscreen}

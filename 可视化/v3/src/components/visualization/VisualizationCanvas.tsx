@@ -50,12 +50,66 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
   // 用于防止频繁缩放的节流
   const [isZooming, setIsZooming] = React.useState(false);
 
+  // 保存专注模式进入前的节点位置
+  const [savedNodePositions, setSavedNodePositions] = React.useState<Map<string, { x: number; y: number }>>(new Map());
+
   // 当聚类模式切换时，清除高亮状态
   useEffect(() => {
     setHighlightedNodeId(null);
   }, [clusterMode]);
 
-  // D3 可视化逻辑
+  // 处理专注模式的进入和退出，防止节点位置被破坏
+  useEffect(() => {
+    if (!simulationRef.current) return;
+    
+    const simulation = simulationRef.current;
+    
+    if (isFocusMode && focusNodeId && savedNodePositions.size === 0) {
+      // 进入专注模式：保存当前节点位置并停止仿真
+      const positions = new Map<string, { x: number; y: number }>();
+      nodes.forEach(node => {
+        if (node.x !== undefined && node.y !== undefined) {
+          positions.set(node.id, { x: node.x, y: node.y });
+        }
+      });
+      setSavedNodePositions(positions);
+      
+      // 停止仿真，固定所有节点位置
+      simulation.stop();
+      nodes.forEach(node => {
+        if (node.x !== undefined && node.y !== undefined) {
+          node.fx = node.x;
+          node.fy = node.y;
+        }
+      });
+      
+    } else if (!isFocusMode && savedNodePositions.size > 0) {
+      // 退出专注模式：恢复保存的节点位置
+      
+      // 恢复节点位置
+      nodes.forEach(node => {
+        const saved = savedNodePositions.get(node.id);
+        if (saved) {
+          node.x = saved.x;
+          node.y = saved.y;
+        }
+        // 释放固定约束
+        node.fx = null;
+        node.fy = null;
+      });
+      
+      // 清理保存的状态
+      setSavedNodePositions(new Map());
+      
+      // 轻微重启仿真以稳定位置
+      simulation.alpha(0.1).restart();
+      setTimeout(() => {
+        simulation.alphaTarget(0);
+      }, 200);
+    }
+  }, [isFocusMode, focusNodeId, nodes, savedNodePositions, simulationRef]);
+
+  // D3 可视化逻辑 - 基础结构创建（不包含专注模式样式）
   useEffect(() => {
     if (!svgRef.current || !containerRef.current || nodes.length === 0) return;
 
@@ -75,7 +129,10 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.1, 5])
       .on("zoom", (event) => {
-        g.attr("transform", event.transform);
+        // 在专注模式下限制缩放，防止破坏节点位置
+        if (!isFocusMode) {
+          g.attr("transform", event.transform);
+        }
       });
 
     svg.call(zoom);
@@ -96,12 +153,6 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       .attr("d", "M 0,-5 L 10,0 L 0,5")
       .attr("fill", "#999");
 
-    // --- 专研模式节点集合 ---
-    let focusSet = new Set<string>();
-    if (isFocusMode && focusNodeId) {
-      focusSet = findConnectedComponent(focusNodeId);
-    }
-
     // --- Links ---
     const link = g
       .append("g")
@@ -109,39 +160,10 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       .selectAll("line")
       .data(links)
       .join("line")
-      .attr("stroke", (d) => {
-        if (isFocusMode && focusNodeId) {
-          const s = typeof d.source === "object" ? d.source.id : d.source;
-          const t = typeof d.target === "object" ? d.target.id : d.target;
-          return focusSet.has(s) && focusSet.has(t) ? "#3498db" : "#ddd";
-        }
-        return "#999";
-      })
-      .attr("stroke-opacity", (d) => {
-        if (isFocusMode && focusNodeId) {
-          const s = typeof d.source === "object" ? d.source.id : d.source;
-          const t = typeof d.target === "object" ? d.target.id : d.target;
-          return focusSet.has(s) && focusSet.has(t) ? 0.9 : 0.1;
-        }
-        return 0.6;
-      })
-      .attr("stroke-width", (d) => {
-        if (isFocusMode && focusNodeId) {
-          const s = typeof d.source === "object" ? d.source.id : d.source;
-          const t = typeof d.target === "object" ? d.target.id : d.target;
-          return focusSet.has(s) && focusSet.has(t) ? 2 : 1;
-        }
-        return 1;
-      })
-      .attr("marker-end", "url(#arrowhead)")
-      .attr("display", (d) => {
-        if (isFocusMode && focusNodeId) {
-          const s = typeof d.source === "object" ? d.source.id : d.source;
-          const t = typeof d.target === "object" ? d.target.id : d.target;
-          return focusSet.has(s) && focusSet.has(t) ? null : "none";
-        }
-        return null;
-      });
+      .attr("stroke", "#999")
+      .attr("stroke-opacity", 0.6)
+      .attr("stroke-width", 1)
+      .attr("marker-end", "url(#arrowhead)");
 
     // --- Nodes ---
     const nodeGroup = g
@@ -151,27 +173,12 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       .data(nodes)
       .join("g")
       .attr("class", "node")
-      .style("cursor", "pointer")
-      .attr("display", (d) => {
-        if (isFocusMode && focusNodeId) {
-          return focusSet.has(d.id) ? null : "none";
-        }
-        return null;
-      });
+      .style("cursor", "pointer");
 
     nodeGroup
       .append("circle")
       .attr("r", (d) => Math.min(Math.sqrt(d.likes) + 3, 15))
-      .attr("fill", (d) => {
-        if (isFocusMode && focusNodeId) {
-          return d.id === focusNodeId
-            ? "#1e90ff"
-            : focusSet.has(d.id)
-            ? "#6ec1ff"
-            : "#ddd";
-        }
-        return "#69b3a2";
-      })
+      .attr("fill", "#69b3a2")
       .attr("stroke", "#fff")
       .attr("stroke-width", 1.5);
 
@@ -183,16 +190,7 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         return -(r + 6);
       })
       .attr("font-size", "12px")
-      .attr("fill", (d) => {
-        if (isFocusMode && focusNodeId) {
-          return d.id === focusNodeId
-            ? "#003366"
-            : focusSet.has(d.id)
-            ? "#003366"
-            : "#ccc";
-        }
-        return "#333";
-      })
+      .attr("fill", "#333")
       .style("pointer-events", "none")
       .style("paint-order", "stroke")
       .style("stroke", "#ffffff")
@@ -242,8 +240,8 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
           return;
         }
 
-        // 实现智能聚焦功能：只在必要时缩放
-        if (svgRef.current && zoomRef.current && containerRef.current && !isZooming) {
+        // 实现智能聚焦功能：只在必要时缩放（仅在非专研模式下）
+        if (svgRef.current && zoomRef.current && containerRef.current && !isZooming && !isFocusMode) {
           const svg = d3.select(svgRef.current);
           const containerRect = containerRef.current.getBoundingClientRect();
           
@@ -294,8 +292,8 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
           }
         }
         
-        // 普通模式下也调用onNodeClick
-        if (!clusterMode) {
+        // 普通模式下调用onNodeClick
+        if (!isFocusMode && !clusterMode) {
           onNodeClick(d);
         }
         
@@ -310,13 +308,13 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         d3
           .forceLink<GraphNode, GraphLink>(links)
           .id((d) => d.id)
-          .distance(80)
-          .strength(0.5) // 降低连接力度，减少抖动
+          .distance(60) // 适中的连接距离
+          .strength(0.6) // 适中的连接强度
       )
-      .force("charge", d3.forceManyBody().strength(-100))
+      .force("charge", d3.forceManyBody().strength(-120)) // 适中的斥力
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius(20))
-      .alphaDecay(0.01) // 降低衰减率，让仿真更稳定
+      .force("collision", d3.forceCollide().radius(18)) // 适中的碰撞半径
+      .alphaDecay(0.015) // 适中的衰减率
       .alphaMin(0.001); // 设置更低的最小alpha值
 
     simulation.on("tick", () => {
@@ -335,6 +333,9 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
     const drag = d3
       .drag<SVGGElement, GraphNode>()
       .on("start", (event, d) => {
+        // 在专注模式下禁用拖拽
+        if (isFocusMode) return;
+        
         // 更保守的仿真重启策略
         if (!event.active && simulation.alpha() < 0.05) {
           simulation.alphaTarget(0.05).restart();
@@ -343,10 +344,16 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         d.fy = d.y;
       })
       .on("drag", (event, d) => {
+        // 在专注模式下禁用拖拽
+        if (isFocusMode) return;
+        
         d.fx = event.x;
         d.fy = event.y;
       })
       .on("end", (event, d) => {
+        // 在专注模式下禁用拖拽
+        if (isFocusMode) return;
+        
         // 快速停止仿真避免持续运动
         if (!event.active) simulation.alphaTarget(0);
         // 释放固定约束
@@ -361,13 +368,16 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       simulation.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, isFocusMode, focusNodeId, onNodeClick, findConnectedComponent, simulationRef, zoomRef, containerRef, svgRef]);
+  }, [nodes, links, onNodeClick, simulationRef, zoomRef, containerRef, svgRef]);
 
   // 单独的effect处理聚类高亮，避免重新创建仿真
   useEffect(() => {
     if (!svgRef.current || !clusterData) return;
     
     const svg = d3.select(svgRef.current);
+    
+    // 如果正在专注模式，不应用聚类高亮
+    if (isFocusMode) return;
     
     // 应用聚类高亮
     if (clusterMode) {
@@ -503,7 +513,7 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         .attr("stroke-opacity", 0.6)
         .attr("stroke-width", 1);
     }
-  }, [clusterMode, clusterData, svgRef]);
+  }, [clusterMode, clusterData, isFocusMode, svgRef]);
 
   // 处理高亮节点的红圈显示（通用机制）
   useEffect(() => {
@@ -537,6 +547,90 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         .attr("stroke-width", 3);
     }
   }, [highlightedNodeId, isFocusMode, focusNodeId, findConnectedComponent, svgRef]);
+
+  // 专门处理专注模式的视觉效果，不重新创建simulation
+  useEffect(() => {
+    if (!svgRef.current) return;
+    
+    const svg = d3.select(svgRef.current);
+    
+    // 计算专注模式的节点集合
+    let focusSet = new Set<string>();
+    if (isFocusMode && focusNodeId) {
+      focusSet = findConnectedComponent(focusNodeId);
+    }
+    
+    // 更新链接样式
+    svg.selectAll<SVGLineElement, GraphLink>(".links line")
+      .attr("stroke", (d) => {
+        if (isFocusMode && focusNodeId) {
+          const s = typeof d.source === "object" ? d.source.id : d.source;
+          const t = typeof d.target === "object" ? d.target.id : d.target;
+          return focusSet.has(s) && focusSet.has(t) ? "#3498db" : "#ddd";
+        }
+        return "#999";
+      })
+      .attr("stroke-opacity", (d) => {
+        if (isFocusMode && focusNodeId) {
+          const s = typeof d.source === "object" ? d.source.id : d.source;
+          const t = typeof d.target === "object" ? d.target.id : d.target;
+          return focusSet.has(s) && focusSet.has(t) ? 0.9 : 0.1;
+        }
+        return 0.6;
+      })
+      .attr("stroke-width", (d) => {
+        if (isFocusMode && focusNodeId) {
+          const s = typeof d.source === "object" ? d.source.id : d.source;
+          const t = typeof d.target === "object" ? d.target.id : d.target;
+          return focusSet.has(s) && focusSet.has(t) ? 2 : 1;
+        }
+        return 1;
+      })
+      .attr("display", (d) => {
+        if (isFocusMode && focusNodeId) {
+          const s = typeof d.source === "object" ? d.source.id : d.source;
+          const t = typeof d.target === "object" ? d.target.id : d.target;
+          return focusSet.has(s) && focusSet.has(t) ? null : "none";
+        }
+        return null;
+      });
+
+    // 更新节点组的显示
+    svg.selectAll<SVGGElement, GraphNode>(".node")
+      .attr("display", (d) => {
+        if (isFocusMode && focusNodeId) {
+          return focusSet.has(d.id) ? null : "none";
+        }
+        return null;
+      });
+
+    // 更新节点颜色
+    svg.selectAll<SVGCircleElement, GraphNode>(".node circle")
+      .attr("fill", (d) => {
+        if (isFocusMode && focusNodeId) {
+          return d.id === focusNodeId
+            ? "#1e90ff"
+            : focusSet.has(d.id)
+            ? "#6ec1ff"
+            : "#ddd";
+        }
+        return "#69b3a2";
+      });
+
+    // 更新文本颜色
+    svg.selectAll<SVGTextElement, GraphNode>(".node text")
+      .attr("fill", (d) => {
+        if (isFocusMode && focusNodeId) {
+          return d.id === focusNodeId
+            ? "#003366"
+            : focusSet.has(d.id)
+            ? "#003366"
+            : "#ccc";
+        }
+        return "#333";
+      });
+      
+  }, [isFocusMode, focusNodeId, findConnectedComponent, svgRef]);
 
   return (
     <div ref={containerRef} className="flex-1 relative overflow-hidden">

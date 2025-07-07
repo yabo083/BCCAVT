@@ -11,6 +11,7 @@ window.addEventListener('message', function(event) {
         console.log('[content-script] 扩展返回：', response);
         window.postMessage({
           type: 'BILIBILI_COOKIES_RESULT',
+          success: response && response.success,
           cookies: response && response.success ? response.data : [],
           error: response && !response.success ? response.error : null
         }, '*');
@@ -19,6 +20,7 @@ window.addEventListener('message', function(event) {
       console.error('[content-script] chrome.runtime.sendMessage 不可用');
       window.postMessage({
         type: 'BILIBILI_COOKIES_RESULT',
+        success: false,
         cookies: [],
         error: 'chrome.runtime.sendMessage 不可用，content-script未被正确注入或扩展未启用'
       }, '*');

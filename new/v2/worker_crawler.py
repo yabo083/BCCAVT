@@ -283,7 +283,7 @@ class BilibiliCommentCrawler:
         """
         爬取指定BV号视频的评论，通过两阶段构建精确的树形结构并保存为JSON文件。
         第一阶段：获取所有评论到一个字典中。
-        第二阶段：根据父子关系构建树。
+        第二阶段：根据父子关系构建树，并彻底修正孤儿评论。
 
         Args:
             bv_id: B站视频BV号
@@ -329,11 +329,10 @@ class BilibiliCommentCrawler:
                     print("已获取所有主评论页面。")
                     break
 
-                # 遍历当前页面的所有评论（可能是顶层评论或被API提升的回复）
-                for p_comment in main_comments_page["replies"]:
+                page_replies = main_comments_page.get("replies", [])
+                for p_comment in page_replies:
                     comment_map[p_comment["rpid"]] = p_comment
 
-                    # 如果该评论有回复，则获取其下所有回复
                     if p_comment.get("rcount", 0) > 0:
                         sub_comments = await self.get_all_sub_comments(
                             video_aid, p_comment["rpid"]
@@ -353,24 +352,27 @@ class BilibiliCommentCrawler:
 
             # --- STAGE 2: 从MAP构建正确的树形结构 ---
             print("🔄 开始根据父子关系构建精确的评论树...")
-            # 首先确保每个评论对象都有一个空的 'replies' 列表
             for c_obj in comment_map.values():
                 c_obj["replies"] = []
 
-            comment_trees = []  # 存储最终的顶层评论树
+            comment_trees = []
             for c_obj in comment_map.values():
                 parent_id = c_obj.get("parent", 0)
                 if parent_id == 0:
-                    # 这是一个真正的顶层评论
                     comment_trees.append(c_obj)
                 else:
-                    # 这是一个回复，找到它的父评论
                     parent_obj = comment_map.get(parent_id)
                     if parent_obj:
-                        # 将其添加到父评论的 'replies' 列表中
                         parent_obj["replies"].append(c_obj)
                     else:
-                        # 如果找不到父评论（可能被删除），为避免数据丢失，将其作为顶层评论处理
+                        # [!!!] 终极修正 [!!!]
+                        # 当评论的父评论找不到时（孤儿评论），必须同时将它的 parent 和 root 都设为0
+                        # 这样才能确保格式转换函数能正确地将其识别为顶层评论
+                        print(
+                            f"⚠️ 警告: 评论 rpid={c_obj['rpid']} 的父评论 rpid={parent_id} 未找到。正在将其修正为顶层评论。"
+                        )
+                        c_obj["parent"] = 0
+                        c_obj["root"] = 0  # <--- 这就是最关键的补充修正！
                         comment_trees.append(c_obj)
 
             print("✅ 评论树结构构建完成。")
@@ -383,13 +385,13 @@ class BilibiliCommentCrawler:
                 progress_callback("转换数据格式...")
 
             print("🔄 开始将评论树转换为目标JSON格式...")
+            comment_trees.sort(key=lambda x: x["rpid"], reverse=True)
             simplified_comments = [
                 self._transform_comment_to_simplified_format(tree_node)
                 for tree_node in comment_trees
             ]
             print("✅ 格式转换完成。")
 
-            # 保存文件
             title = re.sub(r'[\\/:"*?<>|]', "_", info["title"])
             filename = f"{title}_comments.json"
             save_dir = save_dir or os.path.join(
@@ -402,15 +404,11 @@ class BilibiliCommentCrawler:
             with open(save_path, "w", encoding="utf-8") as jsonfile:
                 json.dump(simplified_comments, jsonfile, ensure_ascii=False, indent=2)
 
-            # ... (后续的统计代码保持不变) ...
-            # ...
-
             result = {
                 "file_path": save_path,
                 "video_title": info["title"],
                 "bv_id": bv_id,
                 "total_comments": len(comment_map),
-                # ... 更多统计信息
             }
 
             if progress_callback:
@@ -422,7 +420,6 @@ class BilibiliCommentCrawler:
         except Exception as e:
             error_msg = f"在处理评论时发生严重错误: {str(e)}"
             print(f"[!!] {error_msg}")
-            # 打印 traceback 以便调试
             import traceback
 
             traceback.print_exc()

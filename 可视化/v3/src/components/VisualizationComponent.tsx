@@ -351,8 +351,6 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
     }
   }, [svgRef, clusterData, clusterMode, highlightCluster]);
 
-  // 更新聚类模式时触发高亮 - 现在由handleClusterMode处理
-
   // 搜索功能实现
   const handleSearch = useCallback(() => {
     if (!searchQuery.trim()) return;
@@ -431,27 +429,49 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
       svg.selectAll(".node").style("display", null);
       svg.selectAll(".links line").style("display", null);
 
-      // 重置缩放
-      if (zoomRef.current && containerRef.current) {
-        const containerRect = containerRef.current.getBoundingClientRect();
+      // 重置缩放到默认位置（不居中，避免挤压）
+      if (zoomRef.current) {
         svg
           .transition()
           .duration(750)
           .call(
             zoomRef.current.transform,
-            d3.zoomIdentity.translate(
-              containerRect.width / 2,
-              containerRect.height / 2
-            ).scale(1)
+            d3.zoomIdentity.scale(1)
           );
       }
+    }
+
+    // 停止并重新启动仿真以重新生成节点位置
+    if (simulationRef.current) {
+      // 完全停止当前仿真
+      simulationRef.current.stop();
+      
+      // 重置所有节点的位置和约束
+      nodes.forEach(node => {
+        // 给节点随机的初始位置，避免挤在一起
+        const containerRect = containerRef.current?.getBoundingClientRect();
+        if (containerRect) {
+          node.x = Math.random() * containerRect.width;
+          node.y = Math.random() * containerRect.height;
+        } else {
+          node.x = Math.random() * 800;
+          node.y = Math.random() * 600;
+        }
+        node.fx = null;
+        node.fy = null;
+        node.vx = 0; // 重置速度
+        node.vy = 0;
+      });
+      
+      // 重新启动仿真，使用较高的alpha值确保充分扩散
+      simulationRef.current.alpha(1).restart();
     }
 
     // 重置状态
     setClusterMode(null);
     setSearchQuery("");
     setIsRankingOpen(false);
-  }, [applyHighlight, svgRef, zoomRef, containerRef]);
+  }, [applyHighlight, svgRef, zoomRef, containerRef, nodes, simulationRef]);
 
   // 全屏功能
   const handleFullscreen = () => {
@@ -512,19 +532,22 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
   // 节点点击处理函数
   const handleNodeClick = useCallback((node: GraphNode) => {
     if (isFocusMode) {
-      setFocusNodeId(node.id);
-      setFocusInfo(
-        `专研模式：已显示与"${node.name}"相关的${
-          findConnectedComponent(node.id).size
-        }个节点`
-      );
+      // 只有当选择的节点不同时才更新focusNodeId，避免重绘
+      if (focusNodeId !== node.id) {
+        setFocusNodeId(node.id);
+        setFocusInfo(
+          `专研模式：已显示与"${node.name}"相关的${
+            findConnectedComponent(node.id).size
+          }个节点`
+        );
+      }
       return;
     }
 
     // 普通模式下打开节点详情模态框
     setSelectedNode(node);
     setIsModalOpen(true);
-  }, [isFocusMode, findConnectedComponent]);
+  }, [isFocusMode, focusNodeId, findConnectedComponent]);
 
   // 聚类模式切换处理函数
   const handleClusterMode = useCallback((mode: "radial" | "linear" | "isolated") => {

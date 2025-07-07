@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { CommentDataProcessor } from "@/utils/commentDataProcessor";
 import { CommentData } from "@/types/comment";
@@ -13,6 +13,36 @@ export default function VisualizationPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 检查是否有缓存的数据
+  useEffect(() => {
+    // 确保在客户端环境中执行
+    if (typeof window === 'undefined') return;
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const isCached = urlParams.get('cached') === 'true';
+    
+    if (isCached) {
+      try {
+        const cachedData = sessionStorage.getItem('visualizationData');
+        if (cachedData) {
+          const { filename, data: commentData } = JSON.parse(cachedData);
+          console.log('使用缓存数据:', filename);
+          
+          const dataProcessor = new CommentDataProcessor(commentData);
+          setData(commentData);
+          setProcessor(dataProcessor);
+          setShowUploadModal(false);
+          
+          // 清理缓存数据
+          sessionStorage.removeItem('visualizationData');
+        }
+      } catch (err) {
+        console.error('解析缓存数据失败:', err);
+        setError('加载缓存数据失败，请重新上传文件');
+      }
+    }
+  }, []);
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>

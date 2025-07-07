@@ -3,13 +3,19 @@ import type { Cookie } from "@/types/cookie";
 // 默认配置
 const DEFAULT_CONFIG = {
   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
-  timeout: 30000, // 30秒超时
+  timeout: 60000, // 60秒超时 - 增加基础超时时间
+  downloadTimeout: 300000, // 5分钟下载超时
+  pollInterval: 3000, // 3秒轮询间隔
+  pollTimeout: 1800000, // 30分钟轮询超时
 };
 
 // API配置接口
 interface ApiConfig {
   baseURL?: string;
   timeout?: number;
+  downloadTimeout?: number;
+  pollInterval?: number;
+  pollTimeout?: number;
 }
 
 // 全局API配置
@@ -46,11 +52,13 @@ function buildUrl(endpoint: string): string {
  * 带超时的fetch请求
  * @param url 请求URL
  * @param options fetch选项
+ * @param customTimeout 自定义超时时间
  * @returns Promise<Response>
  */
-async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, customTimeout?: number): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), apiConfig.timeout);
+  const timeout = customTimeout || apiConfig.timeout;
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
     const response = await fetch(url, {
@@ -62,7 +70,7 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`请求超时 (${apiConfig.timeout}ms)`);
+      throw new Error(`请求超时 (${timeout}ms)`);
     }
     throw error;
   }
@@ -230,7 +238,8 @@ export async function downloadCommentData(taskId: string) {
     console.log("下载URL:", url);
     console.log("任务ID:", taskId);
     
-    const res = await fetchWithTimeout(url);
+    // 使用更长的下载超时时间
+    const res = await fetchWithTimeout(url, {}, apiConfig.downloadTimeout);
     
     console.log("响应状态:", res.status);
     console.log("响应状态文本:", res.statusText);
@@ -242,6 +251,8 @@ export async function downloadCommentData(taskId: string) {
       console.error("响应状态:", res.status);
       return { error: `HTTP ${res.status}: ${res.statusText}` };
     }
+
+    // ...existing code...
 
     // 获取并解析 Content-Disposition 头
     const contentDisposition = res.headers.get('Content-Disposition');
@@ -315,11 +326,24 @@ export async function downloadCommentData(taskId: string) {
     window.URL.revokeObjectURL(downloadUrl);
     
     console.log("✅ 文件下载完成:", filename);
+    
+    // 解析JSON数据
+    const text = await blob.text();
+    let jsonData = null;
+    try {
+      jsonData = JSON.parse(text);
+      console.log("✅ JSON数据解析成功");
+    } catch (parseError) {
+      console.warn("❌ JSON解析失败:", parseError);
+    }
+    
     return { 
       success: true, 
       filename, 
       fileSize: blob.size,
-      contentType: blob.type
+      contentType: blob.type,
+      data: jsonData, // 返回解析后的数据
+      blob: blob // 保留原始blob用于下载
     };
     
   } catch (error) {
