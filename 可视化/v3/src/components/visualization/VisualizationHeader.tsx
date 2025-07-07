@@ -1,6 +1,7 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
 
 interface VisualizationHeaderProps {
   nodeCount: number;
@@ -9,6 +10,7 @@ interface VisualizationHeaderProps {
   onFullscreen: () => void;
   onFocusModeToggle: () => void;
   isFocusMode: boolean;
+  onNewAnalysis: () => void;
 }
 
 export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
@@ -18,17 +20,103 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
   onFullscreen,
   onFocusModeToggle,
   isFocusMode,
+  onNewAnalysis,
 }) => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isMenuOpen) {
+        const target = event.target as Element;
+        if (!target.closest('[data-menu]')) {
+          setIsMenuOpen(false);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isMenuOpen]);
+
   return (
     <div className="bg-white/95 backdrop-blur-xl shadow-sm border-b border-white/20 sticky top-0 z-30">
       <div className="flex items-center justify-between px-6 py-4">
-        {/* 左侧标题 */}
+        {/* 左侧标题和菜单 */}
         <div className="flex items-center space-x-4">
-          <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
-            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
+          {/* 菜单图标 */}
+          <div className="relative" data-menu>
+            <button
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 rounded-xl shadow-lg transition-all hover:shadow-xl hover:scale-105"
+            >
+              <svg
+                className="w-6 h-6 text-white"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 6h16M4 12h16M4 18h16"
+                />
+              </svg>
+            </button>
+
+            {/* 下拉菜单 */}
+            {isMenuOpen && (
+              <div className="absolute top-12 left-0 bg-white/98 backdrop-blur-md rounded-xl shadow-2xl border border-gray-200/50 py-2 min-w-48 z-[110] animate-in slide-in-from-top-2 duration-200">
+                <Link
+                  href="/"
+                  className="flex items-center px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
+                >
+                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                  </svg>
+                  <span className="font-medium">返回主页</span>
+                </Link>
+                <button
+                  onClick={() => {
+                    onNewAnalysis();
+                    setIsMenuOpen(false);
+                  }}
+                  className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
+                >
+                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-green-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  <span className="font-medium">新建分析</span>
+                </button>
+                <button
+                  onClick={() => {
+                    onReset();
+                    setIsMenuOpen(false);
+                  }}
+                  className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
+                >
+                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-orange-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span className="font-medium">重置视图</span>
+                </button>
+                <hr className="my-2 border-gray-200/50" />
+                <Link
+                  href="/crawler"
+                  className="flex items-center px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
+                >
+                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-purple-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9" />
+                  </svg>
+                  <span className="font-medium">一站式爬取</span>
+                </Link>
+              </div>
+            )}
           </div>
+          
           <div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent">
               B站评论可视化图谱
@@ -42,17 +130,6 @@ export const VisualizationHeader: React.FC<VisualizationHeaderProps> = ({
           <div className="flex items-center bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/30 p-2 space-x-1">
             <span className="text-xs text-gray-500 px-3 py-1 font-medium">操作工具</span>
             <div className="w-px h-6 bg-gray-200"></div>
-            
-            <button
-              onClick={onReset}
-              className="group flex items-center space-x-2 px-4 py-2.5 bg-white hover:bg-blue-50 text-blue-600 rounded-xl transition-all duration-300 border border-transparent hover:border-blue-200/50 hover:shadow-md active:scale-95"
-              title="重置视图"
-            >
-              <svg className="w-4 h-4 transition-transform group-hover:rotate-180 duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <span className="text-sm font-medium">重置</span>
-            </button>
             
             <button
               onClick={onFullscreen}

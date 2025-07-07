@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
 import { CommentDataProcessor } from "@/utils/commentDataProcessor";
 import { CommentData } from "@/types/comment";
@@ -12,25 +12,7 @@ export default function VisualizationPage() {
   const [error, setError] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(true);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // 点击外部关闭菜单
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (isMenuOpen) {
-        const target = event.target as Element;
-        if (!target.closest('[data-menu]')) {
-          setIsMenuOpen(false);
-        }
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isMenuOpen]);
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -82,74 +64,7 @@ export default function VisualizationPage() {
   if (data && processor && !showUploadModal) {
     return (
       <div className="relative h-screen">
-        {/* 右上角菜单 */}
-        <div className="absolute top-4 right-4 z-[100]" data-menu>
-          <div className="relative">
-            <button
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="flex items-center justify-center w-12 h-12 bg-white/95 hover:bg-white backdrop-blur-md rounded-xl shadow-lg border border-gray-200/50 transition-all hover:shadow-xl hover:scale-105"
-            >
-              <svg
-                className="w-5 h-5 text-gray-700"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 6h16M4 12h16M4 18h16"
-                />
-              </svg>
-            </button>
-
-            {/* 下拉菜单 */}
-            {isMenuOpen && (
-              <div className="absolute top-14 right-0 bg-white/98 backdrop-blur-md rounded-xl shadow-2xl border border-gray-200/50 py-2 min-w-48 z-[110] animate-in slide-in-from-top-2 duration-200">
-                <Link
-                  href="/"
-                  className="flex items-center px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
-                >
-                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                  </svg>
-                  <span className="font-medium">返回主页</span>
-                </Link>
-                <button
-                  onClick={handleNewAnalysis}
-                  className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
-                >
-                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-green-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  <span className="font-medium">新建分析</span>
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
-                >
-                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-orange-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  <span className="font-medium">重置视图</span>
-                </button>
-                <hr className="my-2 border-gray-200/50" />
-                <Link
-                  href="/crawler"
-                  className="flex items-center px-4 py-3 text-gray-700 hover:bg-gray-50/80 transition-colors group"
-                >
-                  <svg className="w-4 h-4 mr-3 text-gray-500 group-hover:text-purple-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9" />
-                  </svg>
-                  <span className="font-medium">一站式爬取</span>
-                </Link>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <VisualizationComponent processor={processor} />
+        <VisualizationComponent processor={processor} onNewAnalysis={handleNewAnalysis} />
       </div>
     );
   }

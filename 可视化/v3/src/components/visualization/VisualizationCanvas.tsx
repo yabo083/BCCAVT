@@ -46,6 +46,9 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
 
   // 用于跟踪当前高亮的节点ID
   const [highlightedNodeId, setHighlightedNodeId] = React.useState<string | null>(null);
+  
+  // 用于防止频繁缩放的节流
+  const [isZooming, setIsZooming] = React.useState(false);
 
   // 当聚类模式切换时，清除高亮状态
   useEffect(() => {
@@ -239,24 +242,56 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
           return;
         }
 
-        // 实现通用的聚焦功能：缩放并居中到节点（适用于所有模式）
-        if (svgRef.current && zoomRef.current && containerRef.current) {
+        // 实现智能聚焦功能：只在必要时缩放
+        if (svgRef.current && zoomRef.current && containerRef.current && !isZooming) {
           const svg = d3.select(svgRef.current);
           const containerRect = containerRef.current.getBoundingClientRect();
           
-          // 计算新的变换以将节点居中
-          const scale = 2;
-          const x = containerRect.width / 2 - (d.x || 0) * scale;
-          const y = containerRect.height / 2 - (d.y || 0) * scale;
+          // 获取当前的变换状态
+          const currentTransform = d3.zoomTransform(svgRef.current);
+          const currentScale = currentTransform.k;
+          
+          // 计算节点在当前变换下的屏幕位置
+          const nodeScreenX = currentTransform.applyX(d.x || 0);
+          const nodeScreenY = currentTransform.applyY(d.y || 0);
+          
+          // 计算节点距离屏幕中心的距离
+          const centerX = containerRect.width / 2;
+          const centerY = containerRect.height / 2;
+          const distanceFromCenter = Math.sqrt(
+            Math.pow(nodeScreenX - centerX, 2) + Math.pow(nodeScreenY - centerY, 2)
+          );
+          
+          // 只有当节点距离中心较远或缩放比例较小时才进行缩放
+          const shouldZoom = distanceFromCenter > 100 || currentScale < 1.5;
+          
+          if (shouldZoom) {
+            setIsZooming(true);
+            
+            // 计算新的变换以将节点居中
+            const targetScale = Math.max(currentScale * 1.2, 2);
+            const x = centerX - (d.x || 0) * targetScale;
+            const y = centerY - (d.y || 0) * targetScale;
 
-          // 应用变换
-          svg
-            .transition()
-            .duration(750)
-            .call(
-              zoomRef.current.transform,
-              d3.zoomIdentity.translate(x, y).scale(scale)
-            );
+            // 应用变换
+            svg
+              .transition()
+              .duration(500)
+              .call(
+                zoomRef.current.transform,
+                d3.zoomIdentity.translate(x, y).scale(targetScale)
+              )
+              .on("end", () => {
+                setIsZooming(false);
+                // 缩放完成后，轻微调整仿真以保持稳定
+                if (simulation.alpha() < 0.01) {
+                  simulation.alpha(0.01).restart();
+                  setTimeout(() => {
+                    simulation.alphaTarget(0);
+                  }, 100);
+                }
+              });
+          }
         }
         
         // 普通模式下也调用onNodeClick
@@ -267,7 +302,7 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         d3.selectAll(".tooltip").remove();
       });
 
-    // Create simulation
+    // Create simulation with improved stability
     const simulation = d3
       .forceSimulation<GraphNode>(nodes)
       .force(
@@ -276,10 +311,13 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
           .forceLink<GraphNode, GraphLink>(links)
           .id((d) => d.id)
           .distance(80)
+          .strength(0.5) // 降低连接力度，减少抖动
       )
       .force("charge", d3.forceManyBody().strength(-100))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius(20));
+      .force("collision", d3.forceCollide().radius(20))
+      .alphaDecay(0.01) // 降低衰减率，让仿真更稳定
+      .alphaMin(0.001); // 设置更低的最小alpha值
 
     simulation.on("tick", () => {
       link
@@ -293,13 +331,13 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
 
     simulationRef.current = simulation;
 
-    // Drag behavior - 优化以避免节点飞散
+    // Drag behavior - 进一步优化稳定性
     const drag = d3
       .drag<SVGGElement, GraphNode>()
       .on("start", (event, d) => {
-        // 只在真正需要时才重启仿真
-        if (!event.active && simulation.alpha() < 0.1) {
-          simulation.alphaTarget(0.1).restart();
+        // 更保守的仿真重启策略
+        if (!event.active && simulation.alpha() < 0.05) {
+          simulation.alphaTarget(0.05).restart();
         }
         d.fx = d.x;
         d.fy = d.y;
@@ -309,8 +347,9 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         d.fy = event.y;
       })
       .on("end", (event, d) => {
+        // 快速停止仿真避免持续运动
         if (!event.active) simulation.alphaTarget(0);
-        // 可选：保持节点固定位置或者释放
+        // 释放固定约束
         d.fx = null;
         d.fy = null;
       });

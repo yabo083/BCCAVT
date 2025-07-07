@@ -16,10 +16,12 @@ import { FocusModeIndicator } from "./visualization/FocusModeIndicator";
 
 interface VisualizationComponentProps {
   processor: CommentDataProcessor;
+  onNewAnalysis?: () => void;
 }
 
 export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
   processor,
+  onNewAnalysis,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -546,6 +548,7 @@ export const VisualizationComponent: React.FC<VisualizationComponentProps> = ({
         onFullscreen={handleFullscreen}
         onFocusModeToggle={handleFocusModeToggle}
         isFocusMode={isFocusMode}
+        onNewAnalysis={onNewAnalysis || (() => {})}
       />
 
       {/* 左侧控制面板 */}
