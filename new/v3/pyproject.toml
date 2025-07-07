@@ -1,0 +1,24 @@
+# pyproject.toml (优化后)
+
+[project]
+name = "v3"
+version = "0.1.0"
+description = "A Bilibili comment crawler API service based on FastAPI and Celery."
+# 你的 Dockerfile 使用的是 python:3.13，这里最好保持一致
+requires-python = ">=3.13" 
+
+dependencies = [
+    "fastapi>=0.115.14",
+    "uvicorn>=0.35.0",
+    # 使用 extras_require 的方式安装 celery 和 redis 依赖，管理更方便
+    "celery[redis]>=5.4.0", 
+    "bilibili-api-python>=17.3.0",
+    # pydantic 是 fastapi 的依赖，但显式声明有助于版本锁定
+    "pydantic>=2.11.7", 
+    # Flower 是一个非常有用的 Celery 监控工具，强烈建议保留
+    "flower>=2.0.1",
+    "aiohttp>=3.12.13",
+]
+
+[tool.uv]
+# 这里可以添加一些 uv 的配置，如果需要的话

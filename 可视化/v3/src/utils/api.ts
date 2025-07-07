@@ -27,6 +27,16 @@ let apiConfig: Required<ApiConfig> = { ...DEFAULT_CONFIG };
  */
 export function setApiConfig(config: ApiConfig) {
   apiConfig = { ...apiConfig, ...config };
+  
+  // 持久化保存到localStorage
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem("api_config", JSON.stringify(apiConfig));
+      console.log("API配置已保存:", apiConfig);
+    } catch (error) {
+      console.error("保存API配置失败:", error);
+    }
+  }
 }
 
 /**
@@ -35,6 +45,26 @@ export function setApiConfig(config: ApiConfig) {
  */
 export function getApiConfig(): Required<ApiConfig> {
   return { ...apiConfig };
+}
+
+/**
+ * 初始化API配置（从localStorage加载）
+ */
+export function initApiConfig() {
+  if (typeof window !== "undefined") {
+    try {
+      const savedConfig = localStorage.getItem("api_config");
+      if (savedConfig) {
+        const parsedConfig = JSON.parse(savedConfig);
+        apiConfig = { ...DEFAULT_CONFIG, ...parsedConfig };
+        console.log("已从本地存储加载API配置:", apiConfig);
+      }
+    } catch (error) {
+      console.error("加载API配置失败:", error);
+      // 使用默认配置
+      apiConfig = { ...DEFAULT_CONFIG };
+    }
+  }
 }
 
 /**

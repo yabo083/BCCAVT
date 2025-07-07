@@ -7,6 +7,7 @@ import {
   setApiConfig,
   downloadCommentData,
   getApiConfig,
+  initApiConfig,
 } from "@/utils/api";
 import { dataStorage } from "@/utils/dataStorage";
 
@@ -102,6 +103,18 @@ export const useCrawlerStore = (): CrawlerStore => {
     }
   }, []);
 
+  // 加载API配置
+  const loadApiConfig = useCallback(() => {
+    try {
+      initApiConfig(); // 初始化API配置
+      const config = getApiConfig();
+      setBaseUrl(config.baseURL); // 同步baseUrl状态
+      console.log("API配置已加载:", config);
+    } catch (error) {
+      console.error("加载API配置失败:", error);
+    }
+  }, []);
+
   // 轮询任务进度
   const startPolling = useCallback((task_id: string) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
@@ -194,10 +207,11 @@ export const useCrawlerStore = (): CrawlerStore => {
       };
       
       initStorage();
+      loadApiConfig(); // 加载API配置
       loadCookiesFromStorage();
       loadDownloadedFiles();
     }
-  }, [isBrowser, loadCookiesFromStorage, loadDownloadedFiles]);
+  }, [isBrowser, loadApiConfig, loadCookiesFromStorage, loadDownloadedFiles]);
 
   // 清理
   useEffect(() => {
@@ -290,6 +304,7 @@ export const useCrawlerStore = (): CrawlerStore => {
       }
 
       await setApiConfig({ baseURL: baseUrl.trim() });
+      console.log("API配置已保存:", baseUrl.trim());
     } catch (error) {
       console.error("设置API配置失败:", error);
     }
