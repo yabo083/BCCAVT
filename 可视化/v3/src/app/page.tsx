@@ -23,7 +23,8 @@ export default function Home() {
   const [isInitialized, setIsInitialized] = useState(false);
 
   // 图片缓存key
-  const getCacheKey = (type: string, size: 'regular' | 'thumb') => `bg_image_cache_${type}_${size}`;
+  const getCacheKey = (type: string, size: "regular" | "thumb") =>
+    `bg_image_cache_${type}_${size}`;
 
   // 保存用户选择的API类型
   const saveApiType = (type: string) => {
@@ -53,20 +54,28 @@ export default function Home() {
   // 从缓存加载图片
   const loadFromCache = (type: string) => {
     try {
-      const regularCacheKey = getCacheKey(type, 'regular');
-      const thumbCacheKey = getCacheKey(type, 'thumb');
-      
+      const regularCacheKey = getCacheKey(type, "regular");
+      const thumbCacheKey = getCacheKey(type, "thumb");
+
       const regularCached = localStorage.getItem(regularCacheKey);
       const thumbCached = localStorage.getItem(thumbCacheKey);
-      
+
       if (regularCached && thumbCached) {
-        const { url: regularUrl, timestamp: regularTimestamp } = JSON.parse(regularCached);
-        const { url: thumbUrl, timestamp: thumbTimestamp } = JSON.parse(thumbCached);
+        const { url: regularUrl, timestamp: regularTimestamp } =
+          JSON.parse(regularCached);
+        const { url: thumbUrl, timestamp: thumbTimestamp } =
+          JSON.parse(thumbCached);
         const now = Date.now();
         const cacheExpiry = 24 * 60 * 60 * 1000; // 24小时过期
 
-        if (now - regularTimestamp < cacheExpiry && now - thumbTimestamp < cacheExpiry) {
-          console.log("[loadFromCache] 从缓存加载图片:", { regularUrl, thumbUrl });
+        if (
+          now - regularTimestamp < cacheExpiry &&
+          now - thumbTimestamp < cacheExpiry
+        ) {
+          console.log("[loadFromCache] 从缓存加载图片:", {
+            regularUrl,
+            thumbUrl,
+          });
           setPlaceholderUrl(thumbUrl);
           setBgUrl(regularUrl);
           setIsLoading(false);
@@ -88,13 +97,13 @@ export default function Home() {
   // 保存到缓存
   const saveToCache = (type: string, regularUrl: string, thumbUrl: string) => {
     try {
-      const regularCacheKey = getCacheKey(type, 'regular');
-      const thumbCacheKey = getCacheKey(type, 'thumb');
+      const regularCacheKey = getCacheKey(type, "regular");
+      const thumbCacheKey = getCacheKey(type, "thumb");
       const timestamp = Date.now();
-      
+
       const regularCacheData = { url: regularUrl, timestamp };
       const thumbCacheData = { url: thumbUrl, timestamp };
-      
+
       localStorage.setItem(regularCacheKey, JSON.stringify(regularCacheData));
       localStorage.setItem(thumbCacheKey, JSON.stringify(thumbCacheData));
       console.log("[saveToCache] 图片已缓存:", { regularUrl, thumbUrl });
@@ -144,7 +153,10 @@ export default function Home() {
     }
 
     try {
-      console.log("[fetchDailyImage] 请求API代理:", `/api/image-proxy?type=${type}`);
+      console.log(
+        "[fetchDailyImage] 请求API代理:",
+        `/api/image-proxy?type=${type}`
+      );
       const res = await fetch(`/api/image-proxy?type=${type}`);
       const data = await res.json();
       console.log("[fetchDailyImage] API代理响应:", data);
@@ -163,7 +175,10 @@ export default function Home() {
         setPlaceholderUrl(thumbUrl);
         setBgUrl(regularUrl);
         saveToCache(type, regularUrl, thumbUrl); // 保存到缓存
-        console.log("[fetchDailyImage] 设置图片URLs:", { regularUrl, thumbUrl });
+        console.log("[fetchDailyImage] 设置图片URLs:", {
+          regularUrl,
+          thumbUrl,
+        });
       } else {
         console.warn("[fetchDailyImage] 无法从API代理响应中提取图片URL:", data);
         setBgUrl("");
@@ -225,7 +240,7 @@ export default function Home() {
           }}
         />
       )}
-      
+
       {bgUrl && (
         // 高清背景图片
         // eslint-disable-next-line @next/next/no-img-element
@@ -255,13 +270,13 @@ export default function Home() {
       {/* <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/20 to-white/80 pointer-events-none" /> */}
 
       {/* 顶部中央标题卡片 */}
-      <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 w-[520px] max-w-[90vw]">
+      <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 w-[400px] sm:w-[520px] lg:w-[640px] xl:w-[720px] max-w-[90vw]">
         <div
-          className="bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl px-10 py-6 text-center border border-white/60 ring-2 ring-blue-200/40 ring-offset-2 animate-fade-in drop-shadow-xl"
+          className="bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl px-6 sm:px-10 py-6 text-center border border-white/60 ring-2 ring-blue-200/40 ring-offset-2 animate-fade-in drop-shadow-xl"
           style={{ boxShadow: "0 0 40px 0 #a5b4fc66" }}
         >
           <h1
-            className="font-kosugi text-4xl md:text-5xl font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent tracking-wide drop-shadow-lg"
+            className="font-kosugi text-2xl sm:text-3xl md:text-4xl lg:text-5xl  font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent tracking-wide drop-shadow-lg leading-tight lg:whitespace-nowrap break-words lg:break-normal"
             style={{ textShadow: "0 2px 8px #a5b4fc66" }}
           >
             Bilibili评论可视化系统
