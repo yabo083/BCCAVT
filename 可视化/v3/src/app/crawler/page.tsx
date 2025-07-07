@@ -36,6 +36,29 @@ export default function CrawlerPage() {
   useEffect(() => {
     console.log('[crawler-page] 安装自动启动消息监听器');
     
+    // 检测content-script是否已注入
+    const checkContentScript = () => {
+      console.log('[crawler-page] 检测content-script状态...');
+      window.postMessage({ type: "EXTENSION_HEALTH_CHECK" }, "*");
+      
+      const timeout = setTimeout(() => {
+        console.warn('[crawler-page] Content-script可能未正确注入');
+      }, 3000);
+      
+      const handler = (event: MessageEvent) => {
+        if (event.data.type === "EXTENSION_HEALTH_RESPONSE") {
+          clearTimeout(timeout);
+          window.removeEventListener("message", handler);
+          console.log('[crawler-page] Content-script已正确注入:', event.data);
+        }
+      };
+      
+      window.addEventListener("message", handler);
+    };
+    
+    // 页面加载后检查content-script
+    setTimeout(checkContentScript, 1000);
+    
     const handleAutoStart = (event: MessageEvent) => {
       console.log('[crawler-page] 收到消息:', event.data);
       
@@ -142,10 +165,23 @@ export default function CrawlerPage() {
 
   // 处理获取Cookie的回调
   const handleGetCookies = () => {
-    store.getCookiesFromExtension(
-      (count) => showSuccess(`成功获取并保存 ${count} 个Cookie`),
-      (error) => showError("扩展返回错误: " + error)
-    );
+    // 首先检查content-script是否已注入
+    console.log("[crawler-page] 开始获取Cookie");
+    console.log("[crawler-page] 当前URL:", window.location.href);
+    
+    // 发送测试消息检查content-script
+    window.postMessage({ type: "EXTENSION_HEALTH_CHECK" }, "*");
+    
+    // 短暂延迟后开始获取Cookie
+    setTimeout(() => {
+      store.getCookiesFromExtension(
+        (count) => showSuccess(`成功获取并保存 ${count} 个Cookie`),
+        (error) => {
+          showError("获取Cookie失败: " + error);
+          console.error("[crawler-page] Cookie获取错误:", error);
+        }
+      );
+    }, 500);
   };
 
   return (

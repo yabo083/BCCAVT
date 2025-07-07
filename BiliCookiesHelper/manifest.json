@@ -12,16 +12,23 @@
     ],
     
     "host_permissions": [
-        "<all_urls>",
-        "http://localhost:3000/*",
-        "https://bccavt.vercel.app/*"
+        "<all_urls>"
     ],
 
     "content_scripts": [
         {
-            "matches": ["http://localhost:3000/*",
-                       "https://bccavt.vercel.app/*"],
-            "js": ["content-script.js"]
+            "matches": [
+                "http://localhost:*/*",
+                "https://localhost:*/*", 
+                "http://127.0.0.1:*/*",
+                "https://127.0.0.1:*/*",
+                "https://bccavt.vercel.app/*",
+                "https://*.vercel.app/*",
+                "https://*.netlify.app/*",
+                "https://*.github.io/*"
+            ],
+            "js": ["content-script.js"],
+            "run_at": "document_start"
         }
     ],
 

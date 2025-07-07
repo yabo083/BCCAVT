@@ -232,42 +232,107 @@ export const useCrawlerStore = (): CrawlerStore => {
 
       setCookiesLoading(true);
 
-      // 设置超时处理
-      const timeoutId = setTimeout(() => {
-        setCookiesLoading(false);
-        onError?.("获取Cookie超时，请确保扩展已安装并启用");
-      }, 10000); // 10秒超时
+      // 首先进行健康检查
+      let healthCheckPassed = false;
+      
+      const healthCheckTimeout = setTimeout(() => {
+        if (!healthCheckPassed) {
+          console.warn("扩展健康检查超时，尝试直接获取Cookie");
+          performCookieRequest();
+        }
+      }, 2000);
 
-      // 监听一次性消息
-      const handleMessage = (event: MessageEvent) => {
+      const healthCheckHandler = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
         if (event.source !== window) return;
-
-        console.log("收到消息:", event.data);
-
-        if (event.data.type === "BILIBILI_COOKIES_RESULT") {
-          clearTimeout(timeoutId);
-
-          window.removeEventListener("message", handleMessage);
-          setCookiesLoading(false);
-
-          if (event.data) {
-            console.log("获取到Cookie:", event.data.cookies);
-            setCookies(event.data.cookies);
-            localStorage.setItem(
-              "bilibili_cookies",
-              JSON.stringify(event.data.cookies)
-            );
-            onSuccess?.(event.data.cookies.length);
+        if (event.data.type === "EXTENSION_HEALTH_RESPONSE") {
+          clearTimeout(healthCheckTimeout);
+          window.removeEventListener("message", healthCheckHandler);
+          healthCheckPassed = true;
+          
+          console.log("扩展健康检查响应:", event.data);
+          
+          if (event.data.extensionValid) {
+            console.log("扩展状态正常，开始获取Cookie");
+            performCookieRequest();
           } else {
-            console.error("获取Cookie失败:", event.data.error);
-            onError?.(event.data.error || "未知错误");
+            setCookiesLoading(false);
+            let errorMsg = "扩展状态异常";
+            
+            if (!event.data.chromeAvailable) {
+              errorMsg = "Chrome API不可用，请确保在Chrome浏览器中运行";
+            } else if (!event.data.runtimeAvailable) {
+              errorMsg = "扩展Runtime不可用，请检查扩展是否正确安装";
+            } else {
+              errorMsg = "扩展上下文无效，请刷新页面重试";
+            }
+            
+            onError?.(errorMsg);
           }
         }
       };
 
-      window.addEventListener("message", handleMessage);
-      window.postMessage({ type: "GET_BILIBILI_COOKIES" }, "*");
+      window.addEventListener("message", healthCheckHandler);
+      window.postMessage({ type: "EXTENSION_HEALTH_CHECK" }, "*");
+
+      function performCookieRequest() {
+        // 设置超时处理
+        const timeoutId = setTimeout(() => {
+          setCookiesLoading(false);
+          onError?.("获取Cookie超时，请确保扩展已安装并启用，或尝试刷新页面");
+        }, 15000); // 增加到15秒超时
+
+        // 监听一次性消息
+        const handleMessage = (event: MessageEvent) => {
+          if (event.origin !== window.location.origin) return;
+          if (event.source !== window) return;
+
+          console.log("收到消息:", event.data);
+
+          if (event.data.type === "BILIBILI_COOKIES_RESULT") {
+            clearTimeout(timeoutId);
+            window.removeEventListener("message", handleMessage);
+            setCookiesLoading(false);
+
+            if (event.data.success) {
+              console.log("获取到Cookie:", event.data.cookies);
+              setCookies(event.data.cookies);
+              localStorage.setItem(
+                "bilibili_cookies",
+                JSON.stringify(event.data.cookies)
+              );
+              onSuccess?.(event.data.cookies.length);
+            } else {
+              console.error("获取Cookie失败:", event.data.error);
+              const errorMsg = event.data.error || "未知错误";
+              
+              // 针对特定错误提供更好的提示
+              if (errorMsg.includes("扩展上下文无效")) {
+                onError?.("扩展需要重新加载，请刷新页面后重试");
+              } else if (errorMsg.includes("Chrome 扩展 API 不可用")) {
+                onError?.("请确保在支持扩展的浏览器中打开此页面");
+              } else if (errorMsg.includes("通信错误")) {
+                onError?.("扩展通信失败，请重新启用扩展或刷新页面");
+              } else {
+                onError?.(errorMsg);
+              }
+            }
+          }
+        };
+
+        // 添加调试信息
+        console.log("开始获取Cookie，当前URL:", window.location.href);
+
+        window.addEventListener("message", handleMessage);
+        
+        // 发送获取Cookie请求
+        window.postMessage({ 
+          type: "GET_BILIBILI_COOKIES",
+          domain: ".bilibili.com" // 明确指定域名
+        }, "*");
+        
+        console.log("已发送GET_BILIBILI_COOKIES消息");
+      }
     },
     [isBrowser]
   );

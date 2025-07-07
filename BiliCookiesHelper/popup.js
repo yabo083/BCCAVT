@@ -155,6 +155,21 @@ document.addEventListener('DOMContentLoaded', () => {
     function getFrontendUrl() {
         return getConfig().frontendUrl;
     }
+    
+    // 验证前端URL可访问性的函数
+    async function validateFrontendUrl(url) {
+        try {
+            // 尝试简单的fetch请求来验证URL
+            const response = await fetch(url, { 
+                method: 'HEAD',
+                mode: 'no-cors' // 避免CORS问题
+            });
+            return true; // 如果没有抛出错误，认为URL是可访问的
+        } catch (error) {
+            console.log('URL验证失败:', error);
+            return false; // 验证失败
+        }
+    }
 
     // 更新状态显示
     function updateStatus(message, type = 'info') {
