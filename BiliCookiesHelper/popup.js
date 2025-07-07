@@ -183,58 +183,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    // 一站式爬取页面按钮
-    if (openCrawlerBtn) {
-        openCrawlerBtn.addEventListener('click', () => {
-            updateStatus('正在跳转到爬取页面...');
-            
-            // 首先获取当前页面的Cookie和URL信息
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                const currentUrl = tabs[0].url;
-                const isBilibili = currentUrl && currentUrl.includes('bilibili.com');
-                
-                // 尝试从URL中提取BV号
-                const bvNumber = extractBvFromUrl(currentUrl);
-                let crawlerUrl = 'http://localhost:3000/crawler?autoStart=true';
-                
-                if (bvNumber) {
-                    crawlerUrl += `&bv=${bvNumber}`;
-                    updateStatus(`检测到BV号: ${bvNumber}，正在跳转...`);
-                } else if (isBilibili) {
-                    updateStatus('B站页面但未检测到BV号，正在跳转...');
-                } else {
-                    updateStatus('正在跳转到爬取页面...');
-                }
-                
-                if (isBilibili) {
-                    // 如果当前是B站页面，先获取Cookie再跳转
-                    chrome.runtime.sendMessage({ action: "getCookies" }, (response) => {
-                        if (response && response.success) {
-                            try {
-                                localStorage.setItem('bilibili_cookies', JSON.stringify(response.data));
-                                updateStatus(`已保存B站Cookie${bvNumber ? '和BV号' : ''}，正在跳转...`);
-                            } catch (error) {
-                                console.error('保存Cookie失败:', error);
-                            }
-                        }
-                        
-                        // 跳转到本地爬取页面
-                        chrome.tabs.create({ 
-                            url: crawlerUrl,
-                            active: true 
-                        });
-                    });
-                } else {
-                    // 如果不是B站页面，直接跳转
-                    chrome.tabs.create({ 
-                        url: crawlerUrl,
-                        active: true 
-                    });
-                }
-            });
-        });
-    }
-
     // 删除已保存的Cookie按钮
     if (clearCookieBtn) {
         clearCookieBtn.addEventListener('click', () => {

@@ -259,6 +259,8 @@ export const useCrawlerStore = (): CrawlerStore => {
   );
 
   const clearCookies = useCallback(() => {
+    console.log("清除所有Cookie");
+    
     setCookies([]);
     if (isBrowser) {
       localStorage.removeItem("bilibili_cookies");
@@ -266,12 +268,14 @@ export const useCrawlerStore = (): CrawlerStore => {
   }, [isBrowser]);
 
   const clearExpiredCookies = useCallback(() => {
+    console.log("清除过期Cookie");
     const now = Date.now();
     const validCookies = cookies.filter((cookie) => {
       return !cookie.expirationDate || cookie.expirationDate * 1000 > now;
     });
 
     if (validCookies.length < cookies.length) {
+        console.log(`清除过期Cookie: ${cookies.length - validCookies.length} 个`);
       setCookies(validCookies);
       if (isBrowser) {
         localStorage.setItem("bilibili_cookies", JSON.stringify(validCookies));
