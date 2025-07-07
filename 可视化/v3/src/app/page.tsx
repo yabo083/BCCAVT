@@ -20,6 +20,16 @@ const IMAGE_APIS = [
     value: "pcGirl",
     url: "https://api.vvhan.com/api/wallpaper/pcGirl?type=json",
   },
+  // {
+  //   label: "PC壁纸（新）",
+  //   value: "pcGirlNew",
+  //   url: "https://api.btstu.cn/sjbz/api.php?format=json",
+  // },
+  {
+    label: "p站",
+    value: "pixiv",
+    url: "/api/pixiv",
+  },
 ];
 
 export default function Home() {
@@ -27,7 +37,9 @@ export default function Home() {
   const [bgUrl, setBgUrl] = useState<string>("");
   const [imgLoading, setImgLoading] = useState(true);
 
-  const [apiType, setApiType] = useState<"bing" | "acg" | "pcGirl">("bing");
+  const [apiType, setApiType] = useState<"bing" | "acg" | "pcGirl" | "pixiv">(
+    "bing"
+  );
   const [isInitialized, setIsInitialized] = useState(false);
 
   // 图片缓存key
@@ -47,8 +59,8 @@ export default function Home() {
   const loadApiType = () => {
     try {
       const savedType = localStorage.getItem("selected_api_type");
-      if (savedType && ["bing", "acg", "pcGirl"].includes(savedType)) {
-        setApiType(savedType as "bing" | "acg");
+      if (savedType && ["bing", "acg", "pcGirl", "pixiv"].includes(savedType)) {
+        setApiType(savedType as "bing" | "acg" | "pcGirl" | "pixiv");
         console.log("[loadApiType] 已加载API类型:", savedType);
         return savedType;
       }
@@ -143,14 +155,41 @@ export default function Home() {
       const res = await fetch(api.url);
       const data = await res.json();
       console.log("[fetchDailyImage] API响应:", data);
-      // 兼容两种API格式
-      let url = data.url;
-      if (!url && data.data && data.data.url) url = data.data.url;
+      // 兼容多种API格式，添加安全检查
+      let url = "";
+
+      // 使用switch语句确定API返回的图片URL格式
+      switch (true) {
+        // 方式1: 直接的url字段
+        case !!data.url:
+          url = data.url;
+          break;
+        // 方式2: imgurl字段
+        case !!data.imgurl:
+          url = data.imgurl;
+          break;
+        // 方式3: data.url嵌套结构
+        case !!(data.data && data.data.url):
+          url = data.data.url;
+          break;
+        // 方式4: pixiv API
+        case !!data.data[0].urls.regular:
+          url = data.data[0].urls.regular;
+          console.log("[fetchDailyImage] 使用pixiv API格式，提取图片URL:", url);
+          break;
+        default:
+          console.log("还真没有匹配到任何图片URL格式");
+          url = "";
+          break;
+      }
 
       if (url) {
         setBgUrl(url);
         saveToCache(type, url); // 保存到缓存
         console.log("[fetchDailyImage] 设置图片url:", url);
+      } else {
+        console.warn("[fetchDailyImage] 无法从API响应中提取图片URL:", data);
+        setBgUrl("");
       }
     } catch (e) {
       console.error("[fetchDailyImage] 加载图片失败:", e);
