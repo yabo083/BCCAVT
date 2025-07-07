@@ -2,121 +2,283 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Cookie 获取器</title>
+  <title>Bilibili Cookie 管理器</title>
   <style>
     body { 
-      width: 350px; 
+      width: 380px; 
+      min-height: 500px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
       margin: 0;
-      padding: 16px;
+      padding: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     }
+    
+    .popup-container {
+      background: white;
+      margin: 8px;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+      min-height: 480px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    /* 标题 */
     .header {
       text-align: center;
       margin-bottom: 16px;
       padding-bottom: 12px;
-      border-bottom: 1px solid #e5e7eb;
+      border-bottom: 2px solid #f1f5f9;
     }
     .header h3 {
       margin: 0;
-      color: #374151;
-      font-size: 18px;
-      font-weight: 600;
+      color: #1e293b;
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
-    .status {
-      background-color: #f3f4f6;
-      padding: 8px 12px;
-      border-radius: 6px;
-      margin-bottom: 12px;
+    
+    /* 通知栏 */
+    .notification-bar {
+      background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid #3b82f6;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .notification-text {
       font-size: 14px;
-      color: #6b7280;
+      color: #475569;
+      margin: 0;
+      font-weight: 500;
+    }
+    
+    /* 按钮组 */
+    .action-buttons {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    
+    .action-btn {
+      padding: 14px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .action-btn::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      transition: left 0.5s;
+    }
+    
+    .action-btn:hover::before {
+      left: 100%;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: white;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+    }
+    
+    .btn-bilibili {
+      background: linear-gradient(135deg, #fb7299, #e85a87);
+      color: white;
+      box-shadow: 0 4px 12px rgba(251, 114, 153, 0.3);
+    }
+    
+    .btn-bilibili:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(251, 114, 153, 0.4);
+    }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }
+    
+    .btn-danger:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+    }
+    
+    /* 主内容区域 */
+    .main-content {
+      flex: 1;
+      background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      border: 1px solid #e2e8f0;
+      min-height: 200px;
+    }
+    
+    .content-header {
+      font-size: 16px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+    }
+    
+    .content-header::before {
+      content: '🍪';
+      margin-right: 8px;
+    }
+    
+    .cookie-display {
+      background: white;
+      border-radius: 6px;
+      padding: 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #475569;
+      max-height: 160px;
+      overflow-y: auto;
+      border: 1px solid #e2e8f0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    
+    .cookie-item {
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      background: #f8fafc;
+      border-radius: 4px;
       border-left: 3px solid #3b82f6;
     }
-    .button-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-    button { 
-      width: 100%; 
-      padding: 10px 16px; 
-      font-size: 14px; 
-      font-weight: 500;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .btn-primary {
-      background-color: #3b82f6;
-      color: white;
-    }
-    .btn-primary:hover {
-      background-color: #2563eb;
-    }
-    .btn-secondary {
-      background-color: #10b981;
-      color: white;
-    }
-    .btn-secondary:hover {
-      background-color: #059669;
-    }
-    .btn-bilibili {
-      background-color: #fb7299;
-      color: white;
-    }
-    .btn-bilibili:hover {
-      background-color: #e85a87;
-    }
-    .btn-danger {
-      background-color: #ef4444;
-      color: white;
-    }
-    .btn-danger:hover {
-      background-color: #dc2626;
-    }
-    .result-section {
-      margin-top: 16px;
-    }
-    .result-section h4 {
-      margin: 0 0 8px 0;
-      color: #374151;
-      font-size: 14px;
+    
+    .cookie-key {
       font-weight: 600;
+      color: #1e293b;
     }
-    pre { 
-      background-color: #f9fafb; 
-      padding: 12px; 
-      white-space: pre-wrap; 
-      word-break: break-all;
-      border-radius: 6px;
-      border: 1px solid #e5e7eb;
+    
+    .cookie-value {
+      color: #64748b;
+    }
+    
+    .cookie-value.encrypted {
+      color: #059669;
+      font-style: italic;
+    }
+    
+    /* 页脚 */
+    .footer {
+      text-align: center;
+      padding: 12px 0 0 0;
+      border-top: 1px solid #e2e8f0;
       font-size: 12px;
-      color: #374151;
-      max-height: 200px;
-      overflow-y: auto;
+      color: #64748b;
     }
+    
+    .footer a {
+      color: #3b82f6;
+      text-decoration: none;
+      margin: 0 4px;
+    }
+    
+    .footer a:hover {
+      text-decoration: underline;
+    }
+    
+    /* 加载动画 */
+    .loading {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 50%;
+      border-top-color: #3b82f6;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 8px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* 状态指示器 */
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    
+    .status-success { background: #10b981; }
+    .status-warning { background: #f59e0b; }
+    .status-error { background: #ef4444; }
+    .status-info { background: #3b82f6; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h3>Bilibili Cookie 管理器</h3>
-  </div>
-  
-  <div id="status" class="status">
-    点击"获取Cookie"按钮开始使用
-  </div>
-
-  <div class="button-group">
-    <button id="getCookieBtn" class="btn-primary">获取当前网站Cookie</button>
-    <button id="getBilibiliCookieBtn" class="btn-bilibili">获取B站Cookie</button>
-    <button id="loadCookieBtn" class="btn-secondary">从本地存储读取Cookie</button>
-    <button id="clearCookieBtn" class="btn-danger">清除所有Cookie</button>
-  </div>
-
-  <div class="result-section">
-    <h4>Cookie 数据:</h4>
-    <pre id="cookieResult">暂无Cookie数据</pre>
+  <div class="popup-container">
+    <!-- 标题 -->
+    <div class="header">
+      <h3>Bilibili Cookie 管理器</h3>
+    </div>
+    
+    <!-- 通知栏 -->
+    <div class="notification-bar">
+      <p class="notification-text" id="status">
+        <span class="status-indicator status-info"></span>
+        点击按钮开始使用扩展功能
+      </p>
+    </div>
+    
+    <!-- 操作按钮组 -->
+    <div class="action-buttons">
+      <button id="getCookieBtn" class="action-btn btn-primary">
+        获取当前网站Cookie
+      </button>
+      <button id="autoExtractBtn" class="action-btn btn-bilibili">
+        自动获取BV号并跳转页面
+      </button>
+      <button id="clearCookieBtn" class="action-btn btn-danger">
+        删除已保存的Cookie
+      </button>
+    </div>
+    
+    <!-- 主内容区域 -->
+    <div class="main-content">
+      <div class="content-header">Cookie列表展示（关键值已加密）</div>
+      <div class="cookie-display" id="cookieResult">
+        暂无Cookie数据，请点击上方按钮获取
+      </div>
+    </div>
+    
+    <!-- 页脚 -->
+    <div class="footer">
+      <span>© 2025 BCCAVT</span> | 
+      <a href="#" id="githubLink">GitHub</a> | 
+      <a href="#" id="helpLink">帮助</a>
+    </div>
   </div>
 
   <script src="popup.js"></script>

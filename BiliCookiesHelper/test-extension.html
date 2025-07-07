@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>扩展功能测试</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+    button { padding: 10px 15px; margin: 5px; }
+    .result { background: #f5f5f5; padding: 10px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>Bilibili Cookie 扩展功能测试</h1>
+  
+  <div class="test-section">
+    <h3>功能列表：</h3>
+    <ul>
+      <li>✅ 获取当前网站Cookie - 智能识别B站页面</li>
+      <li>✅ 一站式爬取页面 - 自动跳转并开始</li>
+      <li>✅ 从本地存储读取Cookie</li>
+      <li>✅ 删除过期Cookie</li>
+      <li>✅ 清除所有Cookie</li>
+    </ul>
+  </div>
+
+  <div class="test-section">
+    <h3>使用说明：</h3>
+    <ol>
+      <li>在任意网站点击"获取当前网站Cookie"按钮</li>
+      <li>如果是B站页面，Cookie会自动保存为B站Cookie</li>
+      <li>点击"一站式爬取页面"会：
+        <ul>
+          <li>如果当前是B站页面，先获取Cookie</li>
+          <li>自动跳转到 http://localhost:3000/crawler?autoStart=true</li>
+          <li>页面会自动加载Cookie并提示开始爬取</li>
+        </ul>
+      </li>
+      <li>"删除过期Cookie"会清理已过期的Cookie</li>
+    </ol>
+  </div>
+
+  <div class="test-section">
+    <h3>技术实现：</h3>
+    <ul>
+      <li>扩展manifest.json增加了tabs权限</li>
+      <li>popup.js增加了智能Cookie分类存储</li>
+      <li>content-script.js增加了自动启动检测</li>
+      <li>爬取页面增加了自动启动监听</li>
+    </ul>
+  </div>
+
+  <div class="test-section">
+    <h3>测试步骤：</h3>
+    <ol>
+      <li>打开B站任意视频页面</li>
+      <li>点击扩展图标</li>
+      <li>点击"获取当前网站Cookie"验证获取功能</li>
+      <li>点击"一站式爬取页面"验证跳转和自动启动</li>
+      <li>在爬取页面验证Cookie自动加载</li>
+    </ol>
+  </div>
+
+</body>
+</html>

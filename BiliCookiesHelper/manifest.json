@@ -1,12 +1,13 @@
 {
     "manifest_version": 3,
-    "name": "通用Cookie获取器",
-    "version": "1.0",
-    "description": "一个可以获取当前激活网站Cookie的开发工具。",
+    "name": "Bilibili Cookie 一站式管理器",
+    "version": "2.0",
+    "description": "增强版Cookie管理器：智能获取、一站式爬取、过期清理等功能。",
     
     "permissions": [
         "cookies",
-        "activeTab"
+        "activeTab",
+        "tabs"
     ],
     
     "host_permissions": [

@@ -32,6 +32,114 @@ export default function CrawlerPage() {
     }
   }, [store.cookies.length, showInfo]);
 
+  // 监听来自扩展的自动启动消息
+  useEffect(() => {
+    console.log('[crawler-page] 安装自动启动消息监听器');
+    
+    const handleAutoStart = (event: MessageEvent) => {
+      console.log('[crawler-page] 收到消息:', event.data);
+      
+      // 严格验证消息来源和格式
+      if (!event.data || 
+          event.data.type !== 'AUTO_START_CRAWLER' ||
+          !event.data.timestamp) {
+        console.log('[crawler-page] 消息验证失败，跳过', event.data);
+        return;
+      }
+
+      console.log('[crawler-page] 收到自动启动消息', event.data);
+      
+      const { bvNumber, timestamp: messageTimestamp } = event.data;
+      const currentTime = Date.now();
+      
+      // 检查消息的时间戳，只处理最近30秒内的消息（与content-script保持一致）
+      if (!messageTimestamp || (currentTime - messageTimestamp) > 30000) {
+        console.log('[crawler-page] 消息时间戳过期，跳过自动启动');
+        return;
+      }
+      
+      // 检查是否在短时间内处理过相同的自动启动请求（使用时间戳作为唯一标识）
+      const lastProcessedKey = `lastAutoStart_${messageTimestamp}`;
+      if (sessionStorage.getItem(lastProcessedKey)) {
+        console.log('[crawler-page] 此自动启动请求已处理过，跳过');
+        return;
+      }
+      
+      // 标记此请求已处理
+      sessionStorage.setItem(lastProcessedKey, 'true');
+      
+      // 首先尝试加载Cookie
+      store.loadCookiesFromStorage();
+      
+      // 如果有BV号，先设置BV号
+      if (bvNumber) {
+        console.log('[crawler-page] 设置BV号:', bvNumber);
+        store.setBv(bvNumber);
+        showInfo(`已自动设置BV号: ${bvNumber}`);
+      }
+      
+      // 延迟一下确保Cookie和BV号都加载完成，然后检查是否可以自动开始爬取
+      setTimeout(() => {
+        if (store.cookies.length > 0) {
+          showSuccess('已自动加载Cookie，可以开始爬取');
+          
+          // 如果有BV号且不在加载中，自动开始爬取
+          if (bvNumber && !store.isLoading) {
+            setTimeout(() => {
+              console.log('[crawler-page] 自动开始爬取');
+              store.startCrawl();
+              showInfo('已自动开始爬取');
+            }, 1000); // 再延迟1秒确保BV号已设置
+          } else if (!bvNumber) {
+            showInfo('已加载Cookie，请输入BV号后点击开始爬取');
+          }
+        } else {
+          showError('未找到Cookie，请先获取Cookie');
+        }
+      }, 500);
+    };
+
+    window.addEventListener('message', handleAutoStart);
+    return () => window.removeEventListener('message', handleAutoStart);
+  }, [store, showSuccess, showError, showInfo]);
+
+  // 页面卸载时清理过期的自动启动标记（只清理超过1小时的标记）
+  useEffect(() => {
+    const cleanup = () => {
+      const currentTime = Date.now();
+      const oneHour = 60 * 60 * 1000; // 1小时
+      
+      // 清理超过1小时的自动启动标记
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith('lastAutoStart_')) {
+          const timestamp = parseInt(key.replace('lastAutoStart_', ''));
+          if (timestamp && (currentTime - timestamp) > oneHour) {
+            sessionStorage.removeItem(key);
+          }
+        }
+      }
+    };
+    
+    // 只在页面真正卸载时清理，不在beforeunload时清理
+    const timer = setInterval(cleanup, 5 * 60 * 1000); // 每5分钟清理一次
+    
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 同时检查URL参数中的BV号（作为备用方案）
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const bvFromUrl = urlParams.get('bv');
+    
+    if (bvFromUrl && !store.bv) {
+      console.log('[crawler-page] 从URL参数设置BV号:', bvFromUrl);
+      store.setBv(bvFromUrl);
+    }
+  }, [store]);
+
   // 处理获取Cookie的回调
   const handleGetCookies = () => {
     store.getCookiesFromExtension(
@@ -92,11 +200,8 @@ export default function CrawlerPage() {
               bv={store.bv}
               onBvChange={store.setBv}
               onStartCrawl={store.startCrawl}
-              onStopPolling={store.stopPolling}
               isLoading={store.isLoading}
               currentApiUrl={getApiConfig().baseURL}
-              currentTaskId={store.currentTaskId}
-              crawlStatus={store.crawlStatus}
             />
 
             {/* 数据文件相关面板 */}
@@ -124,7 +229,6 @@ export default function CrawlerPage() {
             <CrawlStatusPanel 
               crawlStatus={store.crawlStatus}
               progress={store.progress}
-              currentUrl={store.currentUrl}
             />
 
             {/* 使用指引和公告 */}
