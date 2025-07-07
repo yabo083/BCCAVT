@@ -44,6 +44,14 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
   findConnectedComponent,
 }) => {
 
+  // 用于跟踪当前高亮的节点ID
+  const [highlightedNodeId, setHighlightedNodeId] = React.useState<string | null>(null);
+
+  // 当聚类模式切换时，清除高亮状态
+  useEffect(() => {
+    setHighlightedNodeId(null);
+  }, [clusterMode]);
+
   // D3 可视化逻辑
   useEffect(() => {
     if (!svgRef.current || !containerRef.current || nodes.length === 0) return;
@@ -219,170 +227,43 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         d3.selectAll(".tooltip").remove();
       })
       .on("click", function (event, d) {
+        // 阻止事件冒泡，避免影响仿真
+        event.stopPropagation();
+        
+        // 更新高亮节点状态
+        setHighlightedNodeId(d.id);
+        
         if (isFocusMode) {
           onNodeClick(d);
           d3.selectAll(".tooltip").remove();
           return;
         }
 
-        // 在聚类模式下，保持聚类高亮并标记当前点击的节点
-        if (clusterMode) {
-          console.log(`聚类模式下点击节点: ${d.id} (${d.name})`);
+        // 实现通用的聚焦功能：缩放并居中到节点（适用于所有模式）
+        if (svgRef.current && zoomRef.current && containerRef.current) {
+          const svg = d3.select(svgRef.current);
+          const containerRect = containerRef.current.getBoundingClientRect();
           
-          // 实现聚焦功能：缩放并居中到节点
-          if (svgRef.current && zoomRef.current && containerRef.current) {
-            const svg = d3.select(svgRef.current);
-            const containerRect = containerRef.current.getBoundingClientRect();
-            
-            // 计算新的变换以将节点居中
-            const scale = 2;
-            const x = containerRect.width / 2 - (d.x || 0) * scale;
-            const y = containerRect.height / 2 - (d.y || 0) * scale;
+          // 计算新的变换以将节点居中
+          const scale = 2;
+          const x = containerRect.width / 2 - (d.x || 0) * scale;
+          const y = containerRect.height / 2 - (d.y || 0) * scale;
 
-            // 应用变换
-            svg
-              .transition()
-              .duration(750)
-              .call(
-                zoomRef.current.transform,
-                d3.zoomIdentity.translate(x, y).scale(scale)
-              );
-
-            // 延迟应用高亮，确保zoom变换完成，并且使用当前的聚类模式
-            const currentClusterMode = clusterMode; // 保存当前聚类模式状态
-            setTimeout(() => {
-              if (!svgRef.current) return;
-              const svg = d3.select(svgRef.current);
-              
-              // 重新应用聚类高亮逻辑（使用保存的状态）
-              switch (currentClusterMode) {
-                case "radial":
-                  if (clusterData?.radial) {
-                    svg
-                      .selectAll<SVGCircleElement, GraphNode>(".node circle")
-                      .attr("fill", (node) =>
-                        clusterData.radial?.centers.some((c) => c.id === node.id)
-                          ? "#ff6b6b"
-                          : clusterData.radial?.children.get(node.id)?.length
-                          ? "#4ecdc4"
-                          : "#ddd"
-                      )
-                      .attr("r", (node) =>
-                        clusterData.radial?.centers.some((c) => c.id === node.id)
-                          ? 20
-                          : Math.min(Math.sqrt(node.likes) + 3, 15)
-                      );
-
-                    // 高亮连接
-                    svg
-                      .selectAll<SVGLineElement, GraphLink>(".links line")
-                      .attr("stroke", (l) =>
-                        clusterData.radial?.links.some(
-                          (link) => link.source === l.source && link.target === l.target
-                        )
-                          ? "#ff6b6b"
-                          : "#ddd"
-                      )
-                      .attr("stroke-opacity", (l) =>
-                        clusterData.radial?.links.some(
-                          (link) => link.source === l.source && link.target === l.target
-                        )
-                          ? 1
-                          : 0.2
-                      )
-                      .attr("stroke-width", (l) =>
-                        clusterData.radial?.links.some(
-                          (link) => link.source === l.source && link.target === l.target
-                        )
-                          ? 2
-                          : 1
-                      );
-                  }
-                  break;
-                case "linear":
-                  if (clusterData?.linear) {
-                    const chainNodes = new Set(
-                      clusterData.linear.chains.flatMap((chain) =>
-                        chain.nodes.map((n) => n.id)
-                      )
-                    );
-
-                    const chainLinks = new Set<string>();
-                    clusterData.linear.chains.forEach((chain) => {
-                      chain.links.forEach((l) => {
-                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
-                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
-                        chainLinks.add(`${sourceId}-${targetId}`);
-                        chainLinks.add(`${targetId}-${sourceId}`);
-                      });
-                    });
-
-                    svg
-                      .selectAll<SVGCircleElement, GraphNode>(".node circle")
-                      .attr("fill", (node) => (chainNodes.has(node.id) ? "#4ecdc4" : "#ddd"))
-                      .attr("r", (node) =>
-                        chainNodes.has(node.id) ? 12 : Math.min(Math.sqrt(node.likes) + 3, 15)
-                      );
-
-                    svg
-                      .selectAll<SVGLineElement, GraphLink>(".links line")
-                      .attr("stroke", (l) => {
-                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
-                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
-                        return chainLinks.has(`${sourceId}-${targetId}`) ? "#4ecdc4" : "#ddd";
-                      })
-                      .attr("stroke-opacity", (l) => {
-                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
-                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
-                        return chainLinks.has(`${sourceId}-${targetId}`) ? 1 : 0.2;
-                      })
-                      .attr("stroke-width", (l) => {
-                        const sourceId = typeof l.source === "object" ? l.source.id : l.source.toString();
-                        const targetId = typeof l.target === "object" ? l.target.id : l.target.toString();
-                        return chainLinks.has(`${sourceId}-${targetId}`) ? 2 : 1;
-                      });
-                  }
-                  break;
-                case "isolated":
-                  if (clusterData?.isolated) {
-                    const isolatedNodeIds = new Set(
-                      clusterData.isolated.nodes.map((n) => n.id)
-                    );
-                    svg
-                      .selectAll<SVGCircleElement, GraphNode>(".node circle")
-                      .attr("fill", (node) =>
-                        isolatedNodeIds.has(node.id) ? "#ffd93d" : "#ddd"
-                      )
-                      .attr("r", (node) =>
-                        isolatedNodeIds.has(node.id)
-                          ? 12
-                          : Math.min(Math.sqrt(node.likes) + 3, 15)
-                      );
-
-                    svg
-                      .selectAll<SVGLineElement, GraphLink>(".links line")
-                      .attr("stroke", "#ddd")
-                      .attr("stroke-opacity", 0.2)
-                      .attr("stroke-width", 1);
-                  }
-                  break;
-              }
-              
-              // 给目标节点额外的强调（红圈）
-              svg
-                .selectAll<SVGCircleElement, GraphNode>(".node circle")
-                .filter((node: GraphNode) => node.id === d.id)
-                .attr("stroke", "#ff0000")
-                .attr("stroke-width", 3);
-            }, 800); // 稍微延迟确保变换完成
-          }
-          
-          d3.selectAll(".tooltip").remove();
-          return;
+          // 应用变换
+          svg
+            .transition()
+            .duration(750)
+            .call(
+              zoomRef.current.transform,
+              d3.zoomIdentity.translate(x, y).scale(scale)
+            );
         }
-
-        // 普通模式下的点击处理
-        onNodeClick(d);
+        
+        // 普通模式下也调用onNodeClick
+        if (!clusterMode) {
+          onNodeClick(d);
+        }
+        
         d3.selectAll(".tooltip").remove();
       });
 
@@ -412,11 +293,14 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
 
     simulationRef.current = simulation;
 
-    // Drag behavior
+    // Drag behavior - 优化以避免节点飞散
     const drag = d3
       .drag<SVGGElement, GraphNode>()
       .on("start", (event, d) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
+        // 只在真正需要时才重启仿真
+        if (!event.active && simulation.alpha() < 0.1) {
+          simulation.alphaTarget(0.1).restart();
+        }
         d.fx = d.x;
         d.fy = d.y;
       })
@@ -426,6 +310,7 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
       })
       .on("end", (event, d) => {
         if (!event.active) simulation.alphaTarget(0);
+        // 可选：保持节点固定位置或者释放
         d.fx = null;
         d.fy = null;
       });
@@ -580,6 +465,39 @@ export const VisualizationCanvas: React.FC<VisualizationCanvasProps> = ({
         .attr("stroke-width", 1);
     }
   }, [clusterMode, clusterData, svgRef]);
+
+  // 处理高亮节点的红圈显示（通用机制）
+  useEffect(() => {
+    if (!svgRef.current) return;
+    
+    const svg = d3.select(svgRef.current);
+    
+    // 重置所有节点的stroke
+    svg
+      .selectAll<SVGCircleElement, GraphNode>(".node circle")
+      .attr("stroke", (d) => {
+        // 在focus模式下保持原有的逻辑
+        if (isFocusMode && focusNodeId) {
+          const focusSet = findConnectedComponent(focusNodeId);
+          return d.id === focusNodeId
+            ? "#fff"
+            : focusSet.has(d.id)
+            ? "#fff"
+            : "#fff";
+        }
+        return "#fff";
+      })
+      .attr("stroke-width", 1.5);
+
+    // 为高亮节点添加红圈
+    if (highlightedNodeId) {
+      svg
+        .selectAll<SVGCircleElement, GraphNode>(".node circle")
+        .filter((node: GraphNode) => node.id === highlightedNodeId)
+        .attr("stroke", "#ff0000")
+        .attr("stroke-width", 3);
+    }
+  }, [highlightedNodeId, isFocusMode, focusNodeId, findConnectedComponent, svgRef]);
 
   return (
     <div ref={containerRef} className="flex-1 relative overflow-hidden">
