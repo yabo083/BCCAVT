@@ -7,6 +7,154 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusEl = document.getElementById('status');
     const githubLink = document.getElementById('githubLink');
     const helpLink = document.getElementById('helpLink');
+    
+    // 配置相关元素
+    const configBtn = document.getElementById('configBtn');
+    const configModal = document.getElementById('configModal');
+    const closeConfigBtn = document.getElementById('closeConfigBtn');
+    const saveConfigBtn = document.getElementById('saveConfigBtn');
+    const resetConfigBtn = document.getElementById('resetConfigBtn');
+    const frontendUrlInput = document.getElementById('frontendUrl');
+    
+    // 默认配置
+    const DEFAULT_CONFIG = {
+        frontendUrl: 'http://localhost:3000'
+    };
+    
+    // 获取当前配置
+    function getConfig() {
+        try {
+            const saved = localStorage.getItem('bccavt_config');
+            return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
+        } catch (e) {
+            console.error('读取配置失败:', e);
+            return DEFAULT_CONFIG;
+        }
+    }
+    
+    // 保存配置
+    function saveConfig(config) {
+        try {
+            localStorage.setItem('bccavt_config', JSON.stringify(config));
+            return true;
+        } catch (e) {
+            console.error('保存配置失败:', e);
+            return false;
+        }
+    }
+    
+    // 验证URL格式
+    function isValidUrl(string) {
+        try {
+            const url = new URL(string);
+            return url.protocol === 'http:' || url.protocol === 'https:';
+        } catch (_) {
+            return false;
+        }
+    }
+    
+    // 验证前端服务是否可访问
+    async function validateFrontendUrl(url) {
+        try {
+            // 移除末尾的斜杠
+            const cleanUrl = url.replace(/\/$/, '');
+            const response = await fetch(`${cleanUrl}/api/health`).catch(() => 
+                fetch(`${cleanUrl}`).catch(() => ({ ok: false }))
+            );
+            return response.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // 初始化配置
+    function initConfig() {
+        const config = getConfig();
+        frontendUrlInput.value = config.frontendUrl;
+        
+        // 绑定预设按钮事件
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const url = btn.getAttribute('data-url');
+                if (url) {
+                    frontendUrlInput.value = url;
+                }
+            });
+        });
+    }
+    
+    // 配置按钮事件
+    configBtn.addEventListener('click', () => {
+        configModal.classList.add('show');
+        initConfig();
+    });
+    
+    // 关闭配置弹窗
+    closeConfigBtn.addEventListener('click', () => {
+        configModal.classList.remove('show');
+    });
+    
+    // 点击弹窗外部关闭
+    configModal.addEventListener('click', (e) => {
+        if (e.target === configModal) {
+            configModal.classList.remove('show');
+        }
+    });
+    
+    // 保存配置
+    saveConfigBtn.addEventListener('click', async () => {
+        const frontendUrl = frontendUrlInput.value.trim();
+        
+        if (!frontendUrl) {
+            alert('请输入前端服务域名');
+            return;
+        }
+        
+        if (!isValidUrl(frontendUrl)) {
+            alert('请输入有效的URL格式（包含http://或https://）');
+            return;
+        }
+        
+        // 显示保存中状态
+        saveConfigBtn.innerHTML = '<span class="loading"></span>保存中...';
+        saveConfigBtn.disabled = true;
+        
+        // 验证URL是否可访问（可选，因为可能跨域）
+        const isAccessible = await validateFrontendUrl(frontendUrl);
+        if (!isAccessible) {
+            const confirm = window.confirm(
+                '无法验证该URL是否可访问，可能是跨域限制或服务未启动。\n是否仍要保存此配置？'
+            );
+            if (!confirm) {
+                saveConfigBtn.innerHTML = '保存配置';
+                saveConfigBtn.disabled = false;
+                return;
+            }
+        }
+        
+        const config = { frontendUrl: frontendUrl.replace(/\/$/, '') }; // 移除末尾斜杠
+        if (saveConfig(config)) {
+            updateStatus('配置保存成功', 'success');
+            configModal.classList.remove('show');
+        } else {
+            alert('配置保存失败，请重试');
+        }
+        
+        saveConfigBtn.innerHTML = '保存配置';
+        saveConfigBtn.disabled = false;
+    });
+    
+    // 重置配置
+    resetConfigBtn.addEventListener('click', () => {
+        if (confirm('确定要重置为默认配置吗？')) {
+            frontendUrlInput.value = DEFAULT_CONFIG.frontendUrl;
+        }
+    });
+    
+    // 获取前端URL的函数
+    function getFrontendUrl() {
+        return getConfig().frontendUrl;
+    }
 
     // 更新状态显示
     function updateStatus(message, type = 'info') {
@@ -116,7 +264,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 尝试从URL中提取BV号
                 const bvNumber = extractBvFromUrl(currentUrl);
                 const timestamp = Date.now(); // 添加时间戳确保唯一性
-                let crawlerUrl = `http://localhost:3000/crawler?autoStart=true&t=${timestamp}`;
+                const frontendUrl = getFrontendUrl(); // 使用配置的URL
+                let crawlerUrl = `${frontendUrl}/crawler?autoStart=true&t=${timestamp}`;
                 
                 if (bvNumber) {
                     crawlerUrl += `&bv=${bvNumber}`;
@@ -143,6 +292,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         chrome.tabs.create({ 
                             url: crawlerUrl,
                             active: true 
+                        }, (tab) => {
+                            // 注入content script到新打开的页面
+                            if (tab && tab.id) {
+                                setTimeout(() => {
+                                    chrome.scripting.executeScript({
+                                        target: { tabId: tab.id },
+                                        files: ['content-script.js']
+                                    }).catch(err => {
+                                        console.log('Content script注入失败:', err);
+                                    });
+                                }, 1000);
+                            }
                         });
                         
                         autoExtractBtn.innerHTML = '自动获取BV号并跳转页面';
@@ -153,6 +314,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     chrome.tabs.create({ 
                         url: crawlerUrl,
                         active: true 
+                    }, (tab) => {
+                        // 注入content script到新打开的页面
+                        if (tab && tab.id) {
+                            setTimeout(() => {
+                                chrome.scripting.executeScript({
+                                    target: { tabId: tab.id },
+                                    files: ['content-script.js']
+                                }).catch(err => {
+                                    console.log('Content script注入失败:', err);
+                                });
+                            }, 1000);
+                        }
                     });
                     
                     autoExtractBtn.innerHTML = '自动获取BV号并跳转页面';
@@ -211,7 +384,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (helpLink) {
         helpLink.addEventListener('click', (e) => {
             e.preventDefault();
-            chrome.tabs.create({ url: 'http://localhost:3000' });
+            const frontendUrl = getFrontendUrl();
+            chrome.tabs.create({ url: frontendUrl });
         });
     }
 

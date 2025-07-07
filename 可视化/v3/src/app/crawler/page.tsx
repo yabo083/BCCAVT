@@ -43,7 +43,7 @@ export default function CrawlerPage() {
       if (!event.data || 
           event.data.type !== 'AUTO_START_CRAWLER' ||
           !event.data.timestamp) {
-        console.log('[crawler-page] 消息验证失败，跳过', event.data);
+        console.log('[crawler-page] 自动启动未能触发，跳过', event.data);
         return;
       }
 

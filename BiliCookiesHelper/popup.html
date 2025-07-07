@@ -26,6 +26,7 @@
     
     /* 标题 */
     .header {
+      position: relative;
       text-align: center;
       margin-bottom: 16px;
       padding-bottom: 12px;
@@ -40,6 +41,29 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+    }
+    
+    /* 配置按钮 */
+    .config-btn {
+      position: absolute;
+      top: 0;
+      right: 0;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 50%;
+      transition: all 0.3s ease;
+      color: #64748b;
+    }
+    .config-btn:hover {
+      background: #f1f5f9;
+      color: #334155;
+      transform: rotate(90deg);
+    }
+    .config-btn svg {
+      width: 20px;
+      height: 20px;
     }
     
     /* 通知栏 */
@@ -206,6 +230,156 @@
       text-decoration: underline;
     }
     
+    /* 配置弹窗样式 */
+    .config-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    .config-modal.show {
+      display: flex;
+    }
+    
+    .config-content {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      width: 320px;
+      max-width: 90%;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    
+    .config-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    .config-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+    
+    .close-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      color: #64748b;
+    }
+    
+    .close-btn:hover {
+      background: #f1f5f9;
+      color: #334155;
+    }
+    
+    .config-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .form-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: #374151;
+    }
+    
+    .form-input {
+      padding: 10px 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.3s ease;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .form-help {
+      font-size: 12px;
+      color: #64748b;
+    }
+    
+    .form-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    
+    .btn-save {
+      flex: 1;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-save:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-reset {
+      padding: 10px 16px;
+      background: #f8fafc;
+      color: #64748b;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-reset:hover {
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+    }
+    
+    /* 预设按钮样式 */
+    .preset-btn {
+      padding: 6px 12px;
+      background: #f8fafc;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .preset-btn:hover {
+      background: #e2e8f0;
+      border-color: #cbd5e1;
+    }
+    
+    .preset-btn:active {
+      background: #cbd5e1;
+    }
+    
     /* 加载动画 */
     .loading {
       display: inline-block;
@@ -242,6 +416,11 @@
     <!-- 标题 -->
     <div class="header">
       <h3>Bilibili Cookie 管理器</h3>
+      <button class="config-btn" id="configBtn" title="配置设置">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97c0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1c0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z"/>
+        </svg>
+      </button>
     </div>
     
     <!-- 通知栏 -->
@@ -278,6 +457,51 @@
       <span>© 2025 BCCAVT</span> | 
       <a href="#" id="githubLink">GitHub</a> | 
       <a href="#" id="helpLink">帮助</a>
+    </div>
+  </div>
+
+  <!-- 配置弹窗 -->
+  <div class="config-modal" id="configModal">
+    <div class="config-content">
+      <div class="config-header">
+        <div class="config-title">配置设置</div>
+        <button class="close-btn" id="closeConfigBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z"/>
+          </svg>
+        </button>
+      </div>
+      
+      <form class="config-form">
+        <div class="form-group">
+          <label class="form-label" for="frontendUrl">前端服务域名</label>
+          <input 
+            type="url" 
+            id="frontendUrl" 
+            class="form-input" 
+            placeholder="http://localhost:3000"
+            value="http://localhost:3000"
+          />
+          <div class="form-help">
+            设置前端爬取页面的域名地址，支持HTTP和HTTPS协议
+          </div>
+          
+          <!-- 预设选项 -->
+          <div style="margin-top: 12px;">
+            <div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">常用预设：</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+              <button type="button" class="preset-btn" data-url="http://localhost:3000">本地开发</button>
+              <button type="button" class="preset-btn" data-url="https://bccavt.vercel.app">Vercel部署</button>
+              <button type="button" class="preset-btn" data-url="http://localhost:8080">本地8080</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="form-buttons">
+          <button type="button" class="btn-save" id="saveConfigBtn">保存配置</button>
+          <button type="button" class="btn-reset" id="resetConfigBtn">重置</button>
+        </div>
+      </form>
     </div>
   </div>
 
