@@ -157,7 +157,11 @@ export default function Home() {
         "[fetchDailyImage] 请求API代理:",
         `/api/image-proxy?type=${type}`
       );
-      const res = await fetch(`/api/image-proxy?type=${type}`);
+      const res = await fetch(`/api/image-proxy?type=${type}`, {
+        headers: {
+          'ngrok-skip-browser-warning': 'true'
+        }
+      });
       const data = await res.json();
       console.log("[fetchDailyImage] API代理响应:", data);
 

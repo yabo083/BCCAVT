@@ -1,4 +1,7 @@
 import type { Cookie } from "@/types/cookie";
+import { apiClient, configureApiClient, initializeApiClient, type ApiError } from "@/lib/apiClient";
+
+// ==================== 配置管理 ====================
 
 // 默认配置
 const DEFAULT_CONFIG = {
@@ -9,7 +12,7 @@ const DEFAULT_CONFIG = {
   pollTimeout: 1800000, // 30分钟轮询超时
 };
 
-// API配置接口
+// API配置接口（向后兼容）
 interface ApiConfig {
   baseURL?: string;
   timeout?: number;
@@ -18,15 +21,22 @@ interface ApiConfig {
   pollTimeout?: number;
 }
 
-// 全局API配置
+// 全局API配置（向后兼容）
 let apiConfig: Required<ApiConfig> = { ...DEFAULT_CONFIG };
 
 /**
- * 设置API配置
+ * 设置API配置（向后兼容）
  * @param config API配置选项
  */
 export function setApiConfig(config: ApiConfig) {
   apiConfig = { ...apiConfig, ...config };
+  
+  // 同时更新新的 apiClient 配置
+  configureApiClient({
+    baseURL: config.baseURL,
+    timeout: config.timeout,
+    downloadTimeout: config.downloadTimeout,
+  });
   
   // 持久化保存到localStorage
   if (typeof window !== "undefined") {
@@ -40,7 +50,7 @@ export function setApiConfig(config: ApiConfig) {
 }
 
 /**
- * 获取当前API配置
+ * 获取当前API配置（向后兼容）
  * @returns 当前API配置
  */
 export function getApiConfig(): Required<ApiConfig> {
@@ -57,7 +67,18 @@ export function initApiConfig() {
       if (savedConfig) {
         const parsedConfig = JSON.parse(savedConfig);
         apiConfig = { ...DEFAULT_CONFIG, ...parsedConfig };
+        
+        // 同时初始化新的 apiClient
+        configureApiClient({
+          baseURL: parsedConfig.baseURL,
+          timeout: parsedConfig.timeout,
+          downloadTimeout: parsedConfig.downloadTimeout,
+        });
+        
         console.log("已从本地存储加载API配置:", apiConfig);
+      } else {
+        // 如果没有旧配置，尝试初始化新的 apiClient
+        initializeApiClient();
       }
     } catch (error) {
       console.error("加载API配置失败:", error);
@@ -67,44 +88,7 @@ export function initApiConfig() {
   }
 }
 
-/**
- * 构建完整的API URL
- * @param endpoint API端点
- * @returns 完整的URL
- */
-function buildUrl(endpoint: string): string {
-  const baseURL = apiConfig.baseURL.replace(/\/$/, ""); // 移除末尾斜杠
-  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  return `${baseURL}${cleanEndpoint}`;
-}
-
-/**
- * 带超时的fetch请求
- * @param url 请求URL
- * @param options fetch选项
- * @param customTimeout 自定义超时时间
- * @returns Promise<Response>
- */
-async function fetchWithTimeout(url: string, options: RequestInit = {}, customTimeout?: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = customTimeout || apiConfig.timeout;
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`请求超时 (${timeout}ms)`);
-    }
-    throw error;
-  }
-}
+// ==================== 业务逻辑函数 ====================
 
 /**
  * 验证关键Cookie是否存在
@@ -128,10 +112,15 @@ function validateRequiredCookies(cookies: Cookie[]): { isValid: boolean; missing
   };
 }
 
+/**
+ * 开始爬取任务
+ * @param bv BV号
+ * @param cookies Cookie数组
+ * @returns 爬取任务结果
+ */
 export async function startCrawlTask(bv: string, cookies: Cookie[]) {
   try {
-    const url = buildUrl("/api/crawl");
-    console.log("发送爬取请求到:", url);
+    console.log("发送爬取请求到:", "/api/crawl");
     
     // 验证BV号格式
     const bvId = bv.trim();
@@ -170,39 +159,18 @@ export async function startCrawlTask(bv: string, cookies: Cookie[]) {
       dedeuserid: cookieObj.dedeuserid ? '已提取' : '未找到',
     });
     
-    const res = await fetchWithTimeout(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestData),
-    });
+    // 使用新的 apiClient
+    const response = await apiClient.post("/api/crawl", requestData);
+    return response.data;
     
-    if (!res.ok) {
-      // 获取详细错误信息，特别是422错误
-      const errorText = await res.text();
-      console.error("API 错误响应:", errorText);
-      
-      if (res.status === 422) {
-        let errorDetail = "数据验证失败";
-        try {
-          const errorData = JSON.parse(errorText);
-          if (errorData.detail) {
-            // 格式化 FastAPI 的验证错误信息
-            errorDetail = Array.isArray(errorData.detail) 
-              ? errorData.detail.map((e: { loc?: string[]; msg: string }) => `${e.loc?.join('.')}: ${e.msg}`).join(', ')
-              : errorData.detail;
-          }
-        } catch {
-          errorDetail = errorText;
-        }
-        return { error: `数据格式错误: ${errorDetail}` };
-      }
-      
-      return { error: `HTTP ${res.status}: ${res.statusText}` };
-    }
-    
-    return await res.json();
   } catch (error) {
     console.error("API调用失败:", error);
+    
+    if (error && typeof error === 'object' && 'status' in error) {
+      const apiError = error as ApiError;
+      return { error: apiError.message };
+    }
+    
     if (error instanceof Error) {
       return { error: `网络请求失败: ${error.message}` };
     }
@@ -210,27 +178,18 @@ export async function startCrawlTask(bv: string, cookies: Cookie[]) {
   }
 }
 
+/**
+ * 获取爬取状态
+ * @param taskId 任务ID
+ * @returns 任务状态
+ */
 export async function getCrawlStatus(taskId: string) {
   try {
-    const url = buildUrl(`/api/status/${taskId}`);
-    console.log("查询任务状态:", url);
+    console.log("查询任务状态:", `/api/status/${taskId}`);
     
-    const res = await fetchWithTimeout(url);
-    
-    if (!res.ok) {
-      // 详细的错误处理
-      const errorText = await res.text();
-      console.error("状态查询失败:", errorText);
-      
-      return { 
-        error: `HTTP ${res.status}: ${res.statusText}`,
-        status: "ERROR",
-        progress: `状态查询失败: ${res.status}`,
-        task_id: taskId
-      };
-    }
-    
-    const data = await res.json();
+    // 使用新的 apiClient
+    const response = await apiClient.get(`/api/status/${taskId}`);
+    const data = response.data as Record<string, unknown>;
     
     // 确保返回的数据包含必要的字段
     return {
@@ -245,9 +204,20 @@ export async function getCrawlStatus(taskId: string) {
   } catch (error) {
     console.error("状态查询API调用失败:", error);
     
+    let errorMessage = "网络请求失败，请检查后端服务是否启动";
+    let httpStatus = "ERROR";
+    
+    if (error && typeof error === 'object' && 'status' in error) {
+      const apiError = error as ApiError;
+      errorMessage = apiError.message;
+      httpStatus = apiError.status ? String(apiError.status) : "ERROR";
+    } else if (error instanceof Error) {
+      errorMessage = `网络请求失败: ${error.message}`;
+    }
+    
     return {
-      error: error instanceof Error ? `网络请求失败: ${error.message}` : "网络请求失败，请检查后端服务是否启动",
-      status: "ERROR", 
+      error: errorMessage,
+      status: httpStatus, 
       progress: "网络连接失败",
       task_id: taskId,
       result: null,
@@ -263,102 +233,47 @@ export async function getCrawlStatus(taskId: string) {
  */
 export async function downloadCommentData(taskId: string) {
   try {
-    const url = buildUrl(`/api/download/${taskId}`);
     console.log("=== 开始下载评论数据 ===");
-    console.log("下载URL:", url);
+    console.log("下载URL:", `/api/download/${taskId}`);
     console.log("任务ID:", taskId);
     
-    // 使用更长的下载超时时间
-    const res = await fetchWithTimeout(url, {}, apiConfig.downloadTimeout);
+    // 使用新的 apiClient 的下载方法
+    const downloadResult = await apiClient.download(`/api/download/${taskId}`, {
+      timeout: apiConfig.downloadTimeout
+    });
     
-    console.log("响应状态:", res.status);
-    console.log("响应状态文本:", res.statusText);
-    console.log("所有响应头:", Array.from(res.headers.entries()));
+    console.log("下载响应:", {
+      size: downloadResult.size,
+      filename: downloadResult.filename,
+      contentType: downloadResult.contentType,
+    });
     
-    if (!res.ok) {
-      const errorText = await res.text();
-      console.error("下载失败:", errorText);
-      console.error("响应状态:", res.status);
-      return { error: `HTTP ${res.status}: ${res.statusText}` };
-    }
-
-    // ...existing code...
-
-    // 获取并解析 Content-Disposition 头
-    const contentDisposition = res.headers.get('Content-Disposition');
-    let filename = 'comments.json'; // 默认文件名
-    
-    console.log("=== 文件名解析 ===");
-    console.log("Content-Disposition 原始值:", contentDisposition);
-    
-    if (contentDisposition) {
-      // 尝试多种解析方式
-      console.log("开始解析文件名...");
-      
-      // 方法1: 解析 filename*=UTF-8'' 格式（RFC 6266）
-      const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;,\n]*)/i);
-      if (utf8Match && utf8Match[1]) {
-        try {
-          filename = decodeURIComponent(utf8Match[1]);
-          console.log("✅ 使用 UTF-8 编码解析:", filename);
-        } catch (e) {
-          console.warn("❌ UTF-8 文件名解码失败:", e);
-        }
-      } else {
-        // 方法2: 解析普通 filename="" 格式
-        const normalMatch = contentDisposition.match(/filename="([^"]+)"/i);
-        if (normalMatch && normalMatch[1]) {
-          filename = normalMatch[1];
-          console.log("✅ 使用普通格式解析:", filename);
-        } else {
-          // 方法3: 解析无引号的 filename=xxx 格式
-          const simpleMatch = contentDisposition.match(/filename=([^;,\n]+)/i);
-          if (simpleMatch && simpleMatch[1]) {
-            filename = simpleMatch[1].trim();
-            console.log("✅ 使用简单格式解析:", filename);
-          } else {
-            console.warn("❌ 无法解析文件名，使用默认名称");
-          }
-        }
-      }
-    } else {
-      console.warn("❌ 响应中没有 Content-Disposition 头");
-    }
-    
-    console.log("最终使用的文件名:", filename);
-    
-    // 获取文件内容
-    console.log("=== 获取文件内容 ===");
-    const blob = await res.blob();
-    console.log("文件大小:", blob.size, "bytes");
-    console.log("文件类型:", blob.type);
-    
-    if (blob.size === 0) {
+    if (downloadResult.size === 0) {
       console.error("❌ 文件大小为0，可能下载失败");
       return { error: "下载的文件为空" };
     }
     
-    // 创建下载链接
+    // 创建下载链接并触发下载
     console.log("=== 创建下载链接 ===");
-    const downloadUrl = window.URL.createObjectURL(blob);
+    const downloadUrl = window.URL.createObjectURL(downloadResult.blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
-    link.download = filename;
+    link.download = downloadResult.filename || 'comments.json';
     link.style.display = 'none'; // 隐藏链接
     
     // 添加到DOM并触发下载
     document.body.appendChild(link);
-    console.log("触发下载，文件名:", filename);
+    console.log("触发下载，文件名:", downloadResult.filename);
     link.click();
     
     // 清理资源
     document.body.removeChild(link);
     window.URL.revokeObjectURL(downloadUrl);
     
-    console.log("✅ 文件下载完成:", filename);
+    console.log("✅ 文件下载完成:", downloadResult.filename);
     
     // 解析JSON数据
-    const text = await blob.text();
+    const text = await downloadResult.blob.text();
     let jsonData = null;
     try {
       jsonData = JSON.parse(text);
@@ -369,19 +284,26 @@ export async function downloadCommentData(taskId: string) {
     
     return { 
       success: true, 
-      filename, 
-      fileSize: blob.size,
-      contentType: blob.type,
+      filename: downloadResult.filename || 'comments.json', 
+      fileSize: downloadResult.size,
+      contentType: downloadResult.contentType,
       data: jsonData, // 返回解析后的数据
-      blob: blob // 保留原始blob用于下载
+      blob: downloadResult.blob // 保留原始blob用于下载
     };
     
   } catch (error) {
     console.error("❌ 下载过程中发生错误:", error);
-    if (error instanceof Error) {
-      return { error: `下载失败: ${error.message}` };
+    
+    let errorMessage = "下载失败，请检查后端服务是否启动";
+    
+    if (error && typeof error === 'object' && 'status' in error) {
+      const apiError = error as ApiError;
+      errorMessage = `下载失败: ${apiError.message}`;
+    } else if (error instanceof Error) {
+      errorMessage = `下载失败: ${error.message}`;
     }
-    return { error: "下载失败，请检查后端服务是否启动" };
+    
+    return { error: errorMessage };
   }
 }
 

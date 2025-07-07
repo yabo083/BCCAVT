@@ -9,6 +9,7 @@ import {
   getApiConfig,
   initApiConfig,
 } from "@/utils/api";
+import { initializeApiClient } from "@/lib/apiClient";
 import { dataStorage } from "@/utils/dataStorage";
 
 export const useCrawlerStore = (): CrawlerStore => {
@@ -107,6 +108,7 @@ export const useCrawlerStore = (): CrawlerStore => {
   const loadApiConfig = useCallback(() => {
     try {
       initApiConfig(); // 初始化API配置
+      initializeApiClient(); // 初始化新的 API 客户端
       const config = getApiConfig();
       setBaseUrl(config.baseURL); // 同步baseUrl状态
       console.log("API配置已加载:", config);
@@ -142,7 +144,7 @@ export const useCrawlerStore = (): CrawlerStore => {
           console.error("轮询获取状态时出错:", data.error);
           setCrawlStatus(`状态查询失败: ${data.error}`);
           // 对于网络错误，继续轮询而不停止
-          if (!data.error.includes("网络") && !data.error.includes("超时")) {
+          if (typeof data.error === 'string' && !data.error.includes("网络") && !data.error.includes("超时")) {
             clearInterval(pollingRef.current!);
             return;
           }
@@ -151,7 +153,7 @@ export const useCrawlerStore = (): CrawlerStore => {
         const status = data.status || "UNKNOWN";
         const progressText = data.progress || "";
 
-        if (progressText) {
+        if (progressText && typeof progressText === 'string') {
           setCrawlStatus(progressText);
         }
 
@@ -161,7 +163,7 @@ export const useCrawlerStore = (): CrawlerStore => {
 
         const terminalStates = ["SUCCESS", "FAILURE", "REVOKED", "ERROR"];
 
-        if (terminalStates.includes(status)) {
+        if (typeof status === 'string' && terminalStates.includes(status)) {
           clearInterval(pollingRef.current!);
           console.log(`✅ 轮询结束，最终状态: ${status}`);
 
@@ -404,12 +406,15 @@ export const useCrawlerStore = (): CrawlerStore => {
 
     try {
       const data = await startCrawlTask(bvId, cookies);
-      if (data && data.task_id) {
+      if (data && typeof data === 'object' && 'task_id' in data && data.task_id) {
         setCrawlStatus("任务已提交，正在爬取...");
-        setCurrentTaskId(data.task_id);
-        startPolling(data.task_id);
+        setCurrentTaskId(String(data.task_id));
+        startPolling(String(data.task_id));
       } else {
-        setCrawlStatus("任务提交失败: " + (data.error || "未知错误"));
+        const errorMsg = (data && typeof data === 'object' && 'error' in data) 
+          ? String(data.error) 
+          : "未知错误";
+        setCrawlStatus("任务提交失败: " + errorMsg);
       }
     } catch (err) {
       console.error("爬取任务错误:", err);
@@ -428,27 +433,14 @@ export const useCrawlerStore = (): CrawlerStore => {
           console.error("下载失败:", result.error);
           setCrawlStatus(`下载失败: ${result.error}`);
         } else {
-          // 触发文件下载
-          if (result.blob) {
-            const downloadUrl = window.URL.createObjectURL(result.blob);
-            const link = document.createElement('a');
-            link.href = downloadUrl;
-            link.download = result.filename || `${bv}_comments.json`;
-            link.style.display = 'none';
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(downloadUrl);
-          }
-          
-          // 添加到已下载文件列表（包含缓存的数据）
+          // 新的 API 客户端已经自动处理了下载，无需手动触发
+          // 只需要添加到已下载文件列表
           const newFile: DownloadedFile = {
             id: Date.now().toString(),
             name: result.filename || `${bv}_comments.json`,
             taskId: taskId,
             createdAt: new Date(),
-            size: result.fileSize,
+            size: result.fileSize || 0,
             data: result.data, // 缓存解析后的JSON数据
           };
           const updatedFiles = [newFile, ...downloadedFiles];

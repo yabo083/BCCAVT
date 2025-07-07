@@ -38,7 +38,11 @@ export async function GET(request: Request) {
     
     console.log("[image-proxy] 请求API:", api.url);
     
-    const response = await fetch(api.url);
+    const response = await fetch(api.url, {
+      headers: {
+        'ngrok-skip-browser-warning': 'true'
+      }
+    });
     
     if (!response.ok) {
       return NextResponse.json(
