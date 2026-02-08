@@ -167,13 +167,23 @@ export class CommentDataProcessor {
 
     // 计算最终统计数据
     this.stats.totalUsers = uniqueUsers.size;
-    this.stats.averageCommentLength = totalLength / this.stats.totalComments;
     this.stats.totalLikes = totalLikes;
-    this.stats.averageLikes = totalLikes / this.stats.totalComments;
-    this.stats.replyRate = repliesCount / this.stats.totalComments;
-    this.stats.commentPeriod = Math.ceil(
-      (this.stats.latestComment - this.stats.earliestComment) / (24 * 60 * 60)
-    );
+
+    if (this.stats.totalComments > 0) {
+      this.stats.averageCommentLength = totalLength / this.stats.totalComments;
+      this.stats.averageLikes = totalLikes / this.stats.totalComments;
+      this.stats.replyRate = repliesCount / this.stats.totalComments;
+      this.stats.commentPeriod = Math.ceil(
+        (this.stats.latestComment - this.stats.earliestComment) / (24 * 60 * 60)
+      );
+    } else {
+      this.stats.averageCommentLength = 0;
+      this.stats.averageLikes = 0;
+      this.stats.replyRate = 0;
+      this.stats.commentPeriod = 0;
+      this.stats.earliestComment = 0;
+      this.stats.latestComment = 0;
+    }
 
     // 计算节点度数（此时nodeMap已完整）
     this.calculateDegrees(nodeMap);
@@ -466,7 +476,7 @@ export class CommentDataProcessor {
     links: GraphLink[];
   } {
     // v2中孤立节点是度数为0或1的节点（低连接度点）
-    const isolatedNodes = this.graphData.nodes.filter(node => node.degree === 0);
+    const isolatedNodes = this.graphData.nodes.filter(node => node.degree <= 1);
     const isolatedNodeIds = new Set(isolatedNodes.map(n => n.id));
     
     const isolatedLinks = this.graphData.links.filter(link => {

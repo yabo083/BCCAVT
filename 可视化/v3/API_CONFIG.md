@@ -20,7 +20,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 ## 默认配置
 - 默认API基础URL: `http://localhost:8000`
-- 请求超时时间: 30秒
+- 请求超时时间: 60秒
 
 ## API端点
 配置的基础URL将用于以下API端点：
