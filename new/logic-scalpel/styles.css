@@ -1,0 +1,105 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0f1a;
+  --panel: #14182a;
+  --accent: #42e8ff;
+  --text: #e8f1ff;
+  --muted: #93a4c7;
+  --card: #1b2238;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  background: radial-gradient(circle at top, #1a2340 0%, var(--bg) 45%, #080b14 100%);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: rgba(12, 15, 26, 0.85);
+  border-bottom: 1px solid rgba(66, 232, 255, 0.2);
+  backdrop-filter: blur(8px);
+}
+
+.panel-header h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 1px;
+}
+
+.panel-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.primary {
+  background: linear-gradient(135deg, #2f8dff, #42e8ff);
+  border: none;
+  color: #08101b;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 0 20px rgba(66, 232, 255, 0.35);
+}
+
+.panel-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  padding: 16px 20px 20px;
+}
+
+#graph {
+  background: var(--panel);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  min-height: 400px;
+  border: 1px solid rgba(66, 232, 255, 0.15);
+}
+
+.panel-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(66, 232, 255, 0.2);
+  min-height: 120px;
+  color: var(--muted);
+}
+
+.panel-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(66, 232, 255, 0.4);
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  max-width: 240px;
+}
