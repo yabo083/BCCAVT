@@ -22,7 +22,7 @@
 
 ## 注意事项
 
-- 侧边栏 UI 使用本地 `vendor/d3.min.js`，避免扩展 CSP 限制外部 CDN。
+- 侧边栏 UI 依赖 D3 CDN；如需离线运行，请替换为本地 D3 文件。
 - 当前逻辑仅处理 B 站评论接口（`api.bilibili.com/x/v2/reply`）。
 - 响应抓取采用请求完成后再行 `fetch` 的方式读取 JSON，不会影响页面正常请求。
 

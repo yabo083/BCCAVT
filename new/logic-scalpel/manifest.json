@@ -32,8 +32,5 @@
         "path": "rules.json"
       }
     ]
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; script-src-elem 'self'; object-src 'self'"
   }
 }
