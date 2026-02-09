@@ -1,5 +1,0 @@
-Repository rolled back to latest 2025 commit
-Commit: 682680b0bd6a3ccd96605d5a0fb073b4dde39095
-Date: 2025-07-08 02:41:12 +0800
-Message: feat: 添加通用API客户端，支持自动注入全局标头和统一错误处理
-Rollback performed on: 2026-02-09
