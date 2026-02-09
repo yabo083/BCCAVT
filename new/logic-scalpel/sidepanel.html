@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>逻辑手术刀</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  </head>
+  <body>
+    <header class="panel-header">
+      <div>
+        <h1>逻辑手术刀</h1>
+        <p>将 B 站评论整理成逻辑脉络。</p>
+      </div>
+      <button id="diagnose-button" class="primary">逻辑诊断</button>
+    </header>
+
+    <section class="panel-content">
+      <div id="graph"></div>
+      <aside class="panel-info">
+        <h2>选中节点</h2>
+        <div id="selected-info" class="card">尚未选择评论。</div>
+        <div class="panel-meta">
+          <span id="stats">等待数据嗅探中…</span>
+        </div>
+      </aside>
+    </section>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
