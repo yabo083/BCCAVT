@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Loupe · 评鉴">
+  <title>Loupe · 评鉴</title>
+  <defs>
+    <linearGradient id="loupe-bubble" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3d7bff"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#loupe-bubble)">
+    <rect x="8" y="10" width="112" height="70" rx="20"/>
+    <path d="M44 76 L29 108 L68 76 Z"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="5" stroke-linecap="round">
+    <line x1="40" y1="62" x2="64" y2="38"/>
+    <line x1="88" y1="62" x2="64" y2="38"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="64" cy="37" r="9"/>
+    <circle cx="40" cy="63" r="7.5"/>
+    <circle cx="88" cy="63" r="7.5"/>
+  </g>
+</svg>

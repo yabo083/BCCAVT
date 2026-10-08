@@ -8,10 +8,13 @@ import type { Author, Comment, PlatformId, Session, Subject, SubjectRef, Target 
 
 // ───────────────────────── 快照 ─────────────────────────
 
-export const SNAPSHOT_SCHEMA = 1;
+export const SNAPSHOT_SCHEMA = 2;
 
 export interface Completeness {
-  /** 平台声明的总数（主体级 = 评论总数；树级 = 根评论 replyCount + 1）。 */
+  /**
+   * 平台声明的总数（主体级 = 评论总数；树级 = 根评论 replyCount + 1）。
+   * 被选中的分析根是楼中楼时平台不声明其后代总数，这里为 undefined（未知，绝不拿 replyCount=0 冒充）。
+   */
   declared?: number;
   fetched: number;
   /** 因上限 / 未登录 / 平台隐藏导致未取全。 */
@@ -34,13 +37,24 @@ export interface Snapshot {
   id: string;
   target: Target;
   subject: Subject;
-  /** 树级快照：真实根评论 id。 */
+  /**
+   * 树级快照：被选中的分析根评论 id。楼中楼时它是该楼中楼本身（引擎已把 comments 裁剪为它的子树），
+   * 不是包含它的顶层根评论。
+   */
   rootId?: string;
   comments: Comment[];
   fetchedAt: number;
   auth: 'anonymous' | 'user';
   completeness: Completeness;
+  /** 生成本快照时使用的抓取上限（0 = 不限），用于判断旧快照能否满足更大上限的请求。 */
+  caps: CrawlCaps;
   fetchStats: FetchStats;
+}
+
+/** 抓取上限（0 = 不限）。 */
+export interface CrawlCaps {
+  maxRoots: number;
+  maxRepliesPerThread: number;
 }
 
 export interface SnapshotSummary {
@@ -142,7 +156,7 @@ export interface SubjectReport {
 export interface ThreadReport {
   overview: Overview;
   root: Comment;
-  /** 用户指定的评论（楼中楼时与 root 不同）。 */
+  /** 用户指定的评论 id；它就是被选中的分析根（楼中楼时即该楼中楼本身），与 root.id 相同。 */
   focusId: string;
   timeline: Timeline;
   participants: AuthorStat[];
@@ -171,7 +185,7 @@ export interface CrawlProgress {
 }
 
 export type RefreshMode =
-  /** 有快照直接用快照。 */
+  /** 有快照直接用快照（且快照能覆盖本次上限）。 */
   | 'cache-first'
   /** 重新遍历顶层分页，仅对 replyCount 变化的评论树重新抓取（子树级增量）。 */
   | 'incremental'
@@ -180,16 +194,17 @@ export type RefreshMode =
 
 export interface CrawlOptions {
   refresh: RefreshMode;
-  /** 顶层评论上限；超出即停止并标记 truncated。 */
+  /** 顶层评论上限；0 = 不限。超出即停止并标记 truncated。 */
   maxRoots: number;
-  /** 单棵评论树回复上限。 */
+  /** 单棵评论树回复上限；0 = 不限。 */
   maxRepliesPerThread: number;
 }
 
+/** 默认全量抓取、不限上限。 */
 export const DEFAULT_CRAWL_OPTIONS: CrawlOptions = {
-  refresh: 'cache-first',
-  maxRoots: 3000,
-  maxRepliesPerThread: 2000,
+  refresh: 'full',
+  maxRoots: 0,
+  maxRepliesPerThread: 0,
 };
 
 export interface AnalysisResult<R> {

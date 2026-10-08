@@ -60,10 +60,13 @@ export interface Comment {
   creatorLiked?: boolean;
 }
 
-/** 分析目标：整个主体的评论区，或一条评论所在的评论树。 */
+/** 分析目标：整个主体的评论区，或一条评论（含其全部后代）构成的子树。 */
 export type Target =
   | { kind: 'subject'; subject: SubjectRef }
-  /** commentId 可以是根评论也可以是楼中楼；适配器负责定位真实根。 */
+  /**
+   * commentId 是被选中的分析根，可以是根评论也可以是楼中楼。
+   * 适配器负责定位它所在的真实根评论以取全拓扑；引擎再把结果裁剪为「选中评论 + 其后代」。
+   */
   | { kind: 'thread'; subject: SubjectRef; commentId: string };
 
 /** 不透明游标，由适配器定义，必须可 JSON 序列化。 */

@@ -1,0 +1,146 @@
+/**
+ * 设计令牌：唯一一份颜色/间距/字体来源。浅色为默认，深色跟随 prefers-color-scheme。
+ * 颜色只出现在小的语义元素上；正文与数字一律走 --fg 中性色阶。
+ */
+:root {
+  color-scheme: light dark;
+
+  /* 表面（CMF：软阴影 + 分层底色，不用硬边框分割） */
+  --bg: #f5f6f8;
+  --bg-sunken: #eceef2;
+  --surface: #ffffff;
+  --surface-2: #f1f3f7;
+  --surface-3: #e6e9ef;
+  --border: #dde1e8;
+  --border-strong: #c7cdd8;
+
+  --fg: #16181d;
+  --fg-muted: #59616f;
+  --fg-subtle: #838c9b;
+  --fg-on-accent: #ffffff;
+
+  /* 交互主色 */
+  --accent: #0f6fd8;
+  --accent-strong: #0b57ab;
+  --accent-bg: #e6f0fc;
+  --accent-border: #bcd7f5;
+
+  /* 语义状态 */
+  --success: #12734a;
+  --success-bg: #e2f3ea;
+  --success-border: #b4dfc7;
+  --warning: #87570a;
+  --warning-bg: #fcf0da;
+  --warning-border: #efd6a5;
+  --error: #ac271f;
+  --error-bg: #fcebea;
+  --error-border: #f3c5c1;
+  --info: #0b5f8f;
+  --info-bg: #e5f1f8;
+  --info-border: #bad8e9;
+
+  /* AI 立场配色（树着色 / 图例），与 c1..c6 一一对应 */
+  --c1: #2f6fd0;
+  --c1-bg: #e6eefb;
+  --c2: #b8651f;
+  --c2-bg: #fbeede;
+  --c3: #1f7f63;
+  --c3-bg: #e1f2ec;
+  --c4: #7a4fc4;
+  --c4-bg: #efe9fa;
+  --c5: #b3456e;
+  --c5-bg: #fbe7ee;
+  --c6: #5f7318;
+  --c6-bg: #f0f3de;
+
+  /* 形状 */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* 软阴影 */
+  --shadow-1: 0 1px 2px rgb(15 20 30 / 6%), 0 1px 3px rgb(15 20 30 / 4%);
+  --shadow-2: 0 4px 12px rgb(15 20 30 / 10%), 0 2px 4px rgb(15 20 30 / 6%);
+  --shadow-3: 0 12px 32px rgb(15 20 30 / 18%);
+  --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 60%);
+
+  /* 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* 字体 */
+  --font-sans: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --lh-tight: 1.25;
+  --lh-normal: 1.55;
+
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --z-popover: 40;
+  --z-toast: 60;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131519;
+    --bg-sunken: #0e1013;
+    --surface: #1a1d23;
+    --surface-2: #22262e;
+    --surface-3: #2b3038;
+    --border: #2e343d;
+    --border-strong: #3d444f;
+
+    --fg: #e8ebf0;
+    --fg-muted: #a2abba;
+    --fg-subtle: #79838f;
+    --fg-on-accent: #08121d;
+
+    --accent: #4d9cf0;
+    --accent-strong: #7cb8f7;
+    --accent-bg: #1b2a3e;
+    --accent-border: #2f4a6b;
+
+    --success: #5ac48d;
+    --success-bg: #152720;
+    --success-border: #244f39;
+    --warning: #ddae54;
+    --warning-bg: #292314;
+    --warning-border: #4c3e1f;
+    --error: #ef8a80;
+    --error-bg: #2a1a1a;
+    --error-border: #532c2a;
+    --info: #6ab4e6;
+    --info-bg: #142530;
+    --info-border: #27485c;
+
+    --c1: #6aa4f0;
+    --c1-bg: #1d2a3d;
+    --c2: #e0954e;
+    --c2-bg: #2e2417;
+    --c3: #4fbd97;
+    --c3-bg: #172a24;
+    --c4: #a684e8;
+    --c4-bg: #241d33;
+    --c5: #e07ca1;
+    --c5-bg: #2d1c24;
+    --c6: #b0c25c;
+    --c6-bg: #252919;
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 45%), 0 1px 3px rgb(0 0 0 / 30%);
+    --shadow-2: 0 6px 16px rgb(0 0 0 / 45%), 0 2px 6px rgb(0 0 0 / 30%);
+    --shadow-3: 0 16px 40px rgb(0 0 0 / 55%);
+    --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 4%);
+  }
+}

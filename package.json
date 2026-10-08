@@ -1,13 +1,14 @@
 {
-  "name": "bccavt",
+  "name": "loupe",
   "version": "2.0.0",
   "private": true,
   "description": "评论区解析浏览器扩展：鉴权、抓取、分析、可视化、AI 解读一体化（当前平台：Bilibili）",
   "type": "module",
   "scripts": {
-    "build": "vue-tsc --noEmit && vite build",
-    "dev": "vite build --watch --mode development",
+    "build": "vue-tsc --noEmit && node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
     "typecheck": "vue-tsc --noEmit",
+    "icons": "node scripts/render-icons.mjs",
     "test": "vitest run"
   },
   "dependencies": {
