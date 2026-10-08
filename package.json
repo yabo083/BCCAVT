@@ -1,0 +1,40 @@
+{
+  "name": "bccavt",
+  "version": "2.0.0",
+  "private": true,
+  "description": "评论区解析浏览器扩展：鉴权、抓取、分析、可视化、AI 解读一体化（当前平台：Bilibili）",
+  "type": "module",
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "dev": "vite build --watch --mode development",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "d3-force": "^3.0.0",
+    "d3-hierarchy": "^3.1.2",
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0",
+    "idb": "^8.0.4",
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@iconify-json/ph": "^1.2.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/chrome": "^0.3.4",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-hierarchy": "^3.1.7",
+    "@types/d3-selection": "^3.0.12",
+    "@types/d3-zoom": "^3.0.9",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^20.14.5",
+    "typescript": "~6.0",
+    "unplugin-icons": "^24.0.0",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3",
+    "vue-tsc": "^3.3.12"
+  }
+}
