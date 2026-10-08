@@ -2,7 +2,7 @@
 
 | 构件 | 文件 | 职责与边界 |
 |---|---|---|
-| 扩展宿主 | `src/extension/` | MV3 清单、侧栏、右键意图、受限请求头规则；不保存登录 Cookie |
+| 扩展宿主 | `src/extension/` | MV3 清单、侧栏、页面内联按钮与右键意图、受限请求头规则；不保存登录 Cookie |
 | 平台接缝 | `src/core/model.ts`、`platform.ts`、`errors.ts` | 统一主体、评论、分页、错误；评论 ID 始终为字符串 |
 | Bilibili | `src/platforms/bilibili/` | URL 解析、WBI 签名、平台响应校验、评论归一化 |
 | 工作台 | `src/core/workbench.ts`、`crawl.ts` | 任务范围、分页调度、取消、进度、快照复用 |

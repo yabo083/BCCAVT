@@ -33,11 +33,11 @@ interface Placed {
   node: CommentNode;
 }
 
-const host = ref<HTMLElement | null>(null);
+const viewport = ref<HTMLElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const tipEl = ref<HTMLElement | null>(null);
 const tipPoint = ref<Placed | null>(null);
-const { width, height } = useElementSize(host);
+const { width, height } = useElementSize(viewport);
 const tokens = useCanvasTokens();
 
 const transform = ref({ k: 1, x: 0, y: 0 });
@@ -249,34 +249,36 @@ watch(
 </script>
 
 <template>
-  <div ref="host" class="forest">
-    <canvas
-      ref="canvasEl"
-      class="surface"
-      tabindex="0"
-      role="application"
-      aria-label="评论区森林图：拖拽或滚轮缩放，方向键平移，加减号缩放，点击节点打开评论树"
-      @pointermove="onPointerMove"
-      @pointerleave="tipPoint = null"
-      @click="onClick"
-      @keydown="onKeydown"
-    />
-    <div v-if="tipPoint" ref="tipEl" class="tip">
-      <strong>{{ tipPoint.node.comment.author.name }}</strong>
-      <p>
-        {{ tipPoint.node.comment.text.slice(0, 90) }}{{ tipPoint.node.comment.text.length > 90 ? '…' : '' }}
-      </p>
-      <span class="subtle small tnum">
-        子树 {{ formatCount(tipPoint.node.size) }} 条 · 深度 {{ tipPoint.depth }}
-      </span>
-    </div>
-    <div class="overlay row">
-      <span class="chip tnum">{{ formatCount(nodeCount) }} 节点</span>
-      <span class="grow" />
-      <button type="button" class="btn btn-sm btn-ghost" title="重置视图" @click="resetView">
-        <IconCrosshairSimple />
-        重置
-      </button>
+  <div class="forest">
+    <div ref="viewport" class="viewport">
+      <canvas
+        ref="canvasEl"
+        class="surface"
+        tabindex="0"
+        role="application"
+        aria-label="评论区森林图：拖拽或滚轮缩放，方向键平移，加减号缩放，点击节点打开评论树"
+        @pointermove="onPointerMove"
+        @pointerleave="tipPoint = null"
+        @click="onClick"
+        @keydown="onKeydown"
+      />
+      <div v-if="tipPoint" ref="tipEl" class="tip">
+        <strong>{{ tipPoint.node.comment.author.name }}</strong>
+        <p>
+          {{ tipPoint.node.comment.text.slice(0, 90) }}{{ tipPoint.node.comment.text.length > 90 ? '…' : '' }}
+        </p>
+        <span class="subtle small tnum">
+          子树 {{ formatCount(tipPoint.node.size) }} 条 · 深度 {{ tipPoint.depth }}
+        </span>
+      </div>
+      <div class="overlay row">
+        <span class="chip tnum">{{ formatCount(nodeCount) }} 节点</span>
+        <span class="grow" />
+        <button type="button" class="btn btn-sm btn-ghost" title="重置视图" @click="resetView">
+          <IconCrosshairSimple />
+          重置
+        </button>
+      </div>
     </div>
     <p class="legend small subtle">点大小 = 子树规模 · 颜色越浅层级越深 · 点击进入评论树</p>
   </div>
@@ -284,17 +286,26 @@ watch(
 
 <style scoped>
 .forest {
-  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
-.surface {
+/* 画布视口：尺寸完全由 CSS（flex 分配 / min-height）决定，与位图无关，
+   从而切断 canvas.width/height 属性 → 布局高度 → 测量的自增长反馈。 */
+.viewport {
+  position: relative;
   flex: 1;
-  width: 100%;
   min-height: 220px;
+}
+
+/* 绝对定位 + 100% 尺寸：位图大小不可能影响父级几何。 */
+.surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   border-radius: var(--r-sm);
   background: var(--surface);
   touch-action: none;
@@ -333,6 +344,7 @@ watch(
 }
 
 .legend {
+  flex: none;
   margin: var(--sp-1) 0 0;
 }
 </style>

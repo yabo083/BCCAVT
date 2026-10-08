@@ -1,6 +1,5 @@
 <script setup lang="ts">
-/** 应用外壳：顶栏 + 视图切换 + 每个面板的错误边界 + 后台意图消费。 */
-import { onBeforeUnmount, onMounted } from 'vue';
+/** 应用外壳：顶栏 + 视图切换 + 每个面板的错误边界。意图监听在 store 的 init 里注册（要早于初始化完成）。 */
 import type { Component } from 'vue';
 import IconLinkSimple from '~icons/ph/link-simple';
 import IconChartBar from '~icons/ph/chart-bar';
@@ -17,9 +16,8 @@ import HistoryView from './views/HistoryView.vue';
 import SubjectView from './views/SubjectView.vue';
 import TargetView from './views/TargetView.vue';
 import ThreadView from './views/ThreadView.vue';
-import { consumeIntent, state } from './store';
+import { state } from './store';
 import type { View } from './store';
-import { INTENT_KEY } from '@/extension/messages';
 
 interface Tab {
   id: View;
@@ -50,15 +48,6 @@ const VIEW_TITLES: Record<View, string> = {
   ai: 'AI 解读',
   history: '历史与缓存',
 };
-
-function onStorageChanged(changes: Record<string, chrome.storage.StorageChange>, areaName: string): void {
-  if (areaName !== 'session') return;
-  const change = changes[INTENT_KEY];
-  if (change) void consumeIntent(change.newValue);
-}
-
-onMounted(() => chrome.storage.onChanged.addListener(onStorageChanged));
-onBeforeUnmount(() => chrome.storage.onChanged.removeListener(onStorageChanged));
 </script>
 
 <template>

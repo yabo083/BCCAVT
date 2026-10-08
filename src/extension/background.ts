@@ -1,17 +1,21 @@
 /**
  * 后台 Service Worker（ESM）。
- * 职责：侧边栏点击行为、按适配器下发请求头改写（DNR 会话规则）、右键菜单、以及把内容脚本上报的
- * 「最近右键的评论」按标签页暂存，供菜单点击时组装意图。
+ * 职责：侧边栏点击行为、按适配器下发请求头改写（DNR 会话规则）、右键菜单、页面按钮消息，
+ * 以及把内容脚本上报的「最近右键的评论」按标签页暂存，供菜单点击时组装意图。
  */
 import { adapters } from '@/platforms';
 import {
   ENSURE_HEADER_RULES,
   INTENT_KEY,
   LAST_COMMENT_KEY,
+  isAnalyzeRequestMessage,
+  isCommentId,
+  type AnalyzeRequestMessage,
   type EnsureHeaderRulesMessage,
   type LastCommentMessage,
   type OpenTargetIntent,
 } from './messages';
+import { canonicalVideoUrl, isVideoPageUrl } from './url';
 
 /** 会话规则 id 预留区间：注册前整段删除，适配器增减改写时不会残留旧规则。 */
 const HEADER_RULE_ID_BASE = 1;
@@ -23,15 +27,9 @@ const MENU_ANALYZE_THREAD = 'loupe:analyze-thread';
 /** 评论 UI 只在视频页；与 manifest 的 content_scripts 匹配保持一致。 */
 const VIDEO_PAGE_PATTERNS = ['https://www.bilibili.com/video/*'];
 
-/** 与 VIDEO_PAGE_PATTERNS 等价的运行时判定：只放行 Bilibili 视频页 URL。 */
-function isVideoPageUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.origin === 'https://www.bilibili.com' && url.pathname.startsWith('/video/');
-  } catch {
-    return false;
-  }
-}
+/** 侧边栏意图的投递面：只有侧栏会消费它，整页 UI 不会被同一条意图重复触发。 */
+const PANEL_SURFACE = 'side-panel';
+
 
 function headerRewriteRules(): chrome.declarativeNetRequest.Rule[] {
   const rules: chrome.declarativeNetRequest.Rule[] = [];
@@ -92,15 +90,27 @@ async function readLastComment(tabId: number): Promise<LastCommentRecord | null>
   return isLastCommentRecord(value) ? value : null;
 }
 
-async function writeOpenIntent(tabId: number, pageUrl: string, wantThread: boolean): Promise<void> {
-  // 只认「同标签页、同一页面 URL」下记录的评论，避免把上一个页面（或刷新前）的右键上下文带过来。
-  const record = wantThread ? await readLastComment(tabId) : null;
-  const commentId =
-    record !== null && record.pageUrl === pageUrl && record.commentId !== null ? record.commentId : null;
+/**
+ * 右键「分析这条评论」时取最近右键的评论：只认同一标签页、同一页面 URL 下记录的评论，
+ * 避免把上一个页面（或刷新前）的右键上下文带过来。
+ */
+async function menuCommentId(tabId: number, pageUrl: string, wantThread: boolean): Promise<string | null> {
+  if (!wantThread) return null;
+  const record = await readLastComment(tabId);
+  return record !== null && record.pageUrl === pageUrl && record.commentId !== null ? record.commentId : null;
+}
+
+/**
+ * 写入分析意图。input 必须是归一化后的视频地址（不能带评论锚点），否则 UI 的 resolve 会把
+ * 「分析评论区」解析成评论树。意图只投给侧边栏，多窗口时按 windowId 限定。
+ */
+async function writeOpenIntent(input: string, commentId: string | null, windowId: number | undefined): Promise<void> {
   const intent: OpenTargetIntent = {
     type: 'open-target',
-    input: pageUrl,
+    input,
     nonce: crypto.randomUUID(),
+    surface: PANEL_SURFACE,
+    ...(windowId === undefined ? {} : { windowId }),
     ...(commentId === null ? {} : { commentId }),
   };
   await chrome.storage.session.set({ [INTENT_KEY]: intent });
@@ -144,13 +154,35 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   const tabId = tab?.id;
   // 标签页顶层 URL 优先；无论菜单来自哪个 frame，都只接受视频页，杜绝把任意 URL 注入为分析目标。
   const pageUrl = tab?.url ?? info.pageUrl;
-  if (tabId === undefined || pageUrl === undefined || !isVideoPageUrl(pageUrl)) return;
+  if (tabId === undefined || pageUrl === undefined) return;
   const wantThread = info.menuItemId === MENU_ANALYZE_THREAD;
   if (!wantThread && info.menuItemId !== MENU_ANALYZE_SUBJECT) return;
+  const input = canonicalVideoUrl(pageUrl);
+  if (input === null) return;
   // 必须在点击手势里同步发起，否则 chrome.sidePanel.open 会被拒绝
   chrome.sidePanel.open({ tabId }).catch(reportFailure('打开侧边栏'));
-  writeOpenIntent(tabId, pageUrl, wantThread).catch(reportFailure('写入分析意图'));
+  void menuCommentId(tabId, pageUrl, wantThread)
+    .then((commentId) => writeOpenIntent(input, commentId, tab?.windowId))
+    .catch(reportFailure('写入分析意图'));
 });
+
+/**
+ * 页面按钮：内容脚本在点击手势里同步发来消息，这里必须同步调用 sidePanel.open，不能先 await，
+ * 否则用户激活已过期。目标地址只取标签页当前 URL（不信任消息里的 pageUrl 内容），
+ * 但要求两者归一化后一致，防止跨页或伪造上报。
+ */
+function openPanelForPageRequest(message: AnalyzeRequestMessage, sender: chrome.runtime.MessageSender): void {
+  const tab = sender.tab;
+  const tabId = tab?.id;
+  const senderUrl = tab?.url;
+  if (tabId === undefined || senderUrl === undefined) return;
+  const input = canonicalVideoUrl(senderUrl);
+  if (input === null || canonicalVideoUrl(message.pageUrl) !== input) return;
+  const commentId = message.kind === 'thread' && isCommentId(message.commentId) ? message.commentId : null;
+  if (message.kind === 'thread' && commentId === null) return;
+  chrome.sidePanel.open({ tabId }).catch(reportFailure('打开侧边栏'));
+  writeOpenIntent(input, commentId, tab?.windowId).catch(reportFailure('写入分析意图'));
+}
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
@@ -162,6 +194,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         sendResponse({ ok: false });
       });
     return true;
+  }
+  if (isAnalyzeRequestMessage(message)) {
+    openPanelForPageRequest(message, sender);
+    return;
   }
   const tabId = sender.tab?.id;
   const senderUrl = sender.tab?.url;

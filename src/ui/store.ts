@@ -18,7 +18,7 @@ import type {
 } from '@/core/report';
 import type { SubjectInsight, ThreadDiagnosis } from '@/ai/types';
 import { INTENT_KEY } from '@/extension/messages';
-import type { OpenTargetIntent, UiIntent } from '@/extension/messages';
+import type { IntentSurface, OpenTargetIntent, UiIntent } from '@/extension/messages';
 import { ai, ensureHeaderRules, workbench } from './services';
 import { loadCrawlOptions, saveCrawlOptions } from './prefs';
 
@@ -308,12 +308,22 @@ export function cancelAi(): void {
 export function applyIntent(intent: UiIntent): void {
   state.input = intent.input;
   state.inputError = null;
-  if (intent.commentId) void startThread(intent.commentId);
+  const resolved = resolveInput(intent.input);
+  if (!resolved) return;
+  if (intent.commentId) void startThread(intent.commentId, resolved.target.subject);
   else void startSubject(intent.input);
 }
 
 /** 已消费的意图 nonce：启动时读一次与 storage.onChanged 可能拿到同一条。 */
 const consumedNonces = new Set<string>();
+
+/** 本 UI 实例的投递面：侧栏与整页各只消费投给自己的意图，同一条意图不会被两边各跑一次。 */
+let intentSurface: IntentSurface = 'full-tab';
+/** 侧栏宿主窗口；拿不到时不做窗口过滤（宁可能多不能少）。 */
+let intentWindowId: number | null = null;
+/** 初始化期间到达的意图先排队，init() 结束后统一应用，不能静默丢掉。 */
+const queuedIntents: OpenTargetIntent[] = [];
+let intentsReady = false;
 
 function isOpenTargetIntent(value: unknown): value is OpenTargetIntent {
   if (typeof value !== 'object' || value === null) return false;
@@ -323,22 +333,63 @@ function isOpenTargetIntent(value: unknown): value is OpenTargetIntent {
     typeof candidate.input === 'string' &&
     candidate.input.trim().length > 0 &&
     typeof candidate.nonce === 'string' &&
-    (candidate.commentId === undefined || typeof candidate.commentId === 'string')
+    (candidate.surface === 'side-panel' || candidate.surface === 'full-tab') &&
+    (candidate.commentId === undefined || typeof candidate.commentId === 'string') &&
+    (candidate.windowId === undefined || typeof candidate.windowId === 'number')
   );
+}
+
+/** 意图是否投给本 UI 实例；不匹配时保留 storage 里的键，等目标表面启动后再消费。 */
+function targetsThisSurface(intent: OpenTargetIntent): boolean {
+  if (intent.surface !== intentSurface) return false;
+  if (intentSurface !== 'side-panel' || intentWindowId === null || intent.windowId === undefined) return true;
+  return intent.windowId === intentWindowId;
 }
 
 /** 消费一条意图（读自 storage.session，先删后应用，避免重放）。 */
 export async function consumeIntent(value: unknown): Promise<void> {
-  if (!isOpenTargetIntent(value) || consumedNonces.has(value.nonce)) return;
+  if (!isOpenTargetIntent(value) || consumedNonces.has(value.nonce) || !targetsThisSurface(value)) return;
   consumedNonces.add(value.nonce);
+  if (!intentsReady) {
+    // 初始化还没完成：先排队，storage 里的键也先留着，等 init 结束后统一应用（失败也不至于丢）
+    queuedIntents.push(value);
+    return;
+  }
   await chrome.storage.session.remove(INTENT_KEY);
   applyIntent(value);
+}
+
+/** 初始化完成后统一应用排队中的意图，此刻才删除 storage 里的键。 */
+async function flushQueuedIntents(): Promise<void> {
+  const queued = queuedIntents.splice(0);
+  if (queued.length === 0) return;
+  await chrome.storage.session.remove(INTENT_KEY);
+  for (const intent of queued) applyIntent(intent);
 }
 
 /** 启动时读取一次意图。 */
 export async function readStoredIntent(): Promise<void> {
   const bag = await chrome.storage.session.get(INTENT_KEY);
   await consumeIntent(bag[INTENT_KEY]);
+}
+
+/** 后台写入意图的同一刻 UI 可能正在初始化，监听必须尽早挂上，避免事件先于 init 完成而丢失。 */
+function watchIntentStorage(): void {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'session') return;
+    const change = changes[INTENT_KEY];
+    if (change !== undefined) void consumeIntent(change.newValue);
+  });
+}
+
+/** 侧栏按窗口区分；拿不到窗口 id 时退化为「不做窗口过滤」。 */
+async function resolveIntentWindowId(): Promise<void> {
+  if (intentSurface !== 'side-panel') return;
+  try {
+    intentWindowId = (await chrome.windows.getCurrent()).id ?? null;
+  } catch {
+    intentWindowId = null;
+  }
 }
 
 /** 整页模式下的 ?input=…&comment=…：直接开跑，结果通常直接命中缓存。 */
@@ -355,6 +406,9 @@ async function applyInitialQuery(): Promise<boolean> {
 
 export async function init(): Promise<void> {
   state.wide = new URLSearchParams(location.search).get('view') === 'tab';
+  intentSurface = state.wide ? 'full-tab' : 'side-panel';
+  watchIntentStorage();
+  await resolveIntentWindowId();
   // 先确保后台已装好 DNR 请求头改写规则，再发起任何网络请求
   await ensureHeaderRules();
   state.options = await loadCrawlOptions();
@@ -362,6 +416,8 @@ export async function init(): Promise<void> {
   void refreshHistory();
   void suggestFromActiveTab();
   if (!(await applyInitialQuery())) await readStoredIntent();
+  intentsReady = true;
+  await flushQueuedIntents();
 }
 
 /** 活动标签页若是 Bilibili 目标就作为输入建议。 */

@@ -52,12 +52,12 @@ interface Placed {
   node: CommentNode;
 }
 
-const host = ref<HTMLElement | null>(null);
+const viewport = ref<HTMLElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const minimapEl = ref<HTMLCanvasElement | null>(null);
 const tipEl = ref<HTMLElement | null>(null);
 const tipPoint = ref<Placed | null>(null);
-const { width, height } = useElementSize(host);
+const { width, height } = useElementSize(viewport);
 const tokens = useCanvasTokens();
 
 const transform = ref({ k: 1, x: 0, y: 0 });
@@ -362,45 +362,47 @@ watch(
 </script>
 
 <template>
-  <div ref="host" class="thread">
-    <canvas
-      ref="canvasEl"
-      class="surface"
-      tabindex="0"
-      role="application"
-      aria-label="评论树：拖拽或滚轮缩放，方向键平移，单击选中评论，双击折叠子树"
-      @pointermove="onPointerMove"
-      @pointerleave="tipPoint = null"
-      @click="tipPoint && emit('select', tipPoint.node.comment.id)"
-      @dblclick="tipPoint && tipPoint.node.children.length && emit('toggle-collapse', tipPoint.node.comment.id)"
-      @keydown="onKeydown"
-    />
-    <div v-if="tipPoint" ref="tipEl" class="tip">
-      <strong>{{ tipPoint.node.comment.author.name }}</strong>
-      <p>
-        {{ tipPoint.node.comment.text.slice(0, 90) }}{{ tipPoint.node.comment.text.length > 90 ? '…' : '' }}
-      </p>
-      <span class="subtle small tnum">深度 {{ tipPoint.depth }} · 子树 {{ tipPoint.node.size }} 条</span>
-    </div>
-    <div class="minimap">
+  <div class="thread">
+    <div ref="viewport" class="viewport">
       <canvas
-        ref="minimapEl"
-        :width="MINIMAP_WIDTH"
-        :height="MINIMAP_HEIGHT"
-        :style="{ width: `${MINIMAP_WIDTH}px`, height: `${MINIMAP_HEIGHT}px` }"
-        @click="onMinimapClick"
+        ref="canvasEl"
+        class="surface"
+        tabindex="0"
+        role="application"
+        aria-label="评论树：拖拽或滚轮缩放，方向键平移，单击选中评论，双击折叠子树"
+        @pointermove="onPointerMove"
+        @pointerleave="tipPoint = null"
+        @click="tipPoint && emit('select', tipPoint.node.comment.id)"
+        @dblclick="tipPoint && tipPoint.node.children.length && emit('toggle-collapse', tipPoint.node.comment.id)"
+        @keydown="onKeydown"
       />
-    </div>
-    <div class="toolbar row">
-      <button type="button" class="btn btn-sm btn-ghost" title="折叠全部子树" @click="emit('collapse-all')">
-        <IconArrowsIn />
-      </button>
-      <button type="button" class="btn btn-sm btn-ghost" title="展开全部" @click="emit('expand-all')">
-        <IconArrowsOut />
-      </button>
-      <button type="button" class="btn btn-sm btn-ghost" title="重置视图" @click="applyTransform(fitTransform())">
-        <IconCrosshairSimple />
-      </button>
+      <div v-if="tipPoint" ref="tipEl" class="tip">
+        <strong>{{ tipPoint.node.comment.author.name }}</strong>
+        <p>
+          {{ tipPoint.node.comment.text.slice(0, 90) }}{{ tipPoint.node.comment.text.length > 90 ? '…' : '' }}
+        </p>
+        <span class="subtle small tnum">深度 {{ tipPoint.depth }} · 子树 {{ tipPoint.node.size }} 条</span>
+      </div>
+      <div class="minimap">
+        <canvas
+          ref="minimapEl"
+          :width="MINIMAP_WIDTH"
+          :height="MINIMAP_HEIGHT"
+          :style="{ width: `${MINIMAP_WIDTH}px`, height: `${MINIMAP_HEIGHT}px` }"
+          @click="onMinimapClick"
+        />
+      </div>
+      <div class="toolbar row">
+        <button type="button" class="btn btn-sm btn-ghost" title="折叠全部子树" @click="emit('collapse-all')">
+          <IconArrowsIn />
+        </button>
+        <button type="button" class="btn btn-sm btn-ghost" title="展开全部" @click="emit('expand-all')">
+          <IconArrowsOut />
+        </button>
+        <button type="button" class="btn btn-sm btn-ghost" title="重置视图" @click="applyTransform(fitTransform())">
+          <IconCrosshairSimple />
+        </button>
+      </div>
     </div>
     <p class="legend small subtle">单击选中 · 双击折叠 · 滚轮缩放 · 拖拽平移</p>
   </div>
@@ -408,17 +410,26 @@ watch(
 
 <style scoped>
 .thread {
-  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
-.surface {
+/* 画布视口：尺寸完全由 CSS（flex 分配 / min-height）决定，与位图无关，
+   从而切断 canvas.width/height 属性 → 布局高度 → 测量的自增长反馈。 */
+.viewport {
+  position: relative;
   flex: 1;
-  width: 100%;
   min-height: 260px;
+}
+
+/* 绝对定位 + 100% 尺寸：位图大小不可能影响父级几何。 */
+.surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   border-radius: var(--r-sm);
   background: var(--surface);
   touch-action: none;
@@ -468,6 +479,7 @@ watch(
 }
 
 .legend {
+  flex: none;
   margin: var(--sp-1) 0 0;
 }
 </style>
