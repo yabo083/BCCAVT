@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loupe · 评鉴 — 隐私政策</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.7 -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  time, .meta { color: #6b7280; font-size: .9rem; }
+  ul { padding-left: 1.2rem; }
+  li { margin: .35rem 0; }
+  code { background: rgba(127,127,127,.15); padding: .1rem .3rem; border-radius: 3px; font-size: .92em; }
+  hr { border: 0; border-top: 1px solid rgba(127,127,127,.25); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<h1>Loupe · 评鉴 隐私政策</h1>
+<p class="meta">生效日期：2026-10-11 ｜ 适用扩展：Loupe · 评鉴（Chrome / Edge）</p>
+
+<p>Loupe · 评鉴（以下简称「本扩展」）是一个运行在你浏览器本地的评论区分析工具。本政策说明本扩展处理哪些数据、数据流向哪里、以及你的控制权。</p>
+
+<h2>一、本扩展不收集、不上传、不出售你的数据</h2>
+<ul>
+  <li>本扩展<strong>没有自己的服务器</strong>。所有抓取、建树、统计与可视化都在你的浏览器内完成。</li>
+  <li>本扩展<strong>不收集</strong>任何个人信息，<strong>不出售或共享</strong>数据给第三方，<strong>不做任何用户行为分析或广告用途</strong>。</li>
+</ul>
+
+<h2>二、本扩展处理的数据</h2>
+<ul>
+  <li><strong>公开评论内容</strong>：在你主动触发分析时，本扩展使用你当前浏览器的登录态从哔哩哔哩（bilibili.com）读取评论区数据，包括评论正文、作者昵称与等级、时间、点赞数、表情与图片。<strong>这些数据仅在你本地处理并缓存于本机浏览器</strong>，不会离开你的设备，除非你执行下述「AI 解读」操作。</li>
+  <li><strong>本机缓存与设置</strong>：抓取结果缓存保存在本机 IndexedDB，你的偏好设置保存在 <code>chrome.storage.local</code>；关闭浏览器不会使它们离开你的设备。</li>
+  <li><strong>你主动发起的写操作</strong>：当你点击点赞、回复或发表评论时，本扩展在哔哩哔哩页面上下文内，使用你当前浏览器会话携带的登录态与 CSRF 令牌（<code>bili_jct</code>）向哔哩哔哩官方接口提交请求。<strong>该令牌只在这一次请求体内即时使用，不被保存、不跨页面传递、不进入日志、快照或缓存键</strong>。写操作与你直接在 B 站网页上点赞、发评论使用的是同一套身份与接口。</li>
+</ul>
+
+<h2>三、数据流向（唯一的例外：AI 解读）</h2>
+<ul>
+  <li>本扩展<strong>默认不调用任何外部服务</strong>。仅当你<strong>明确开启并点击</strong>「AI 解读 / 诊断」时，才会把经过预算限制的<strong>评论摘录</strong>发送到你<strong>自己配置的 OpenAI 兼容端点</strong>（Base URL 与模型由你填写）。</li>
+  <li>该端点由你自备，本扩展不提供默认端点、不经手或中转请求。发送前请确认你选择的端点及其服务方的数据处理条款。</li>
+  <li>你配置的 API Key 保存在本机 <code>chrome.storage.local</code>，不进入历史快照，也不会上传到本扩展作者或任何第三方。</li>
+</ul>
+
+<h2>四、本扩展如何读取哔哩哔哩页面</h2>
+<ul>
+  <li>为呈现「替换评论区」功能，本扩展会在你开启开关后隐藏原生评论区节点并挂载自绘评论区。本扩展<strong>仅读取公开评论数据</strong>，不读取你的密码、邮箱、私信或任何与评论分析无关的账号信息。</li>
+  <li>扩展被重载或更新后，本扩展会停止并向你提示刷新页面以恢复。</li>
+</ul>
+
+<h2>五、你的控制权</h2>
+<ul>
+  <li><strong>随时撤销</strong>：在扩展图标的设置面板里关闭开关，或在 <code>chrome://extensions</code> 中卸载本扩展，即可停止全部行为；历史与缓存会随卸载从本机移除。</li>
+  <li><strong>清除数据</strong>：在工作台「历史」中删除快照，即可清除本机保存的评论数据。</li>
+</ul>
+
+<h2>六、变更</h2>
+<p>本政策更新时，会在本页面修订生效日期。重大变更会通过扩展更新说明提示。</p>
+
+<hr>
+<p class="meta">联系：如对本政策有疑问，请通过本扩展在商店页列出的联系方式与开发者联系。</p>
+</body>
+</html>
