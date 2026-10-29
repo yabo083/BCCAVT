@@ -163,7 +163,7 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     const adapter = new FakeAdapter();
     let call = 0;
     // 登录态热度序：同一个 offset 连续返回，平台在服务端会话里推进
-    adapter.rootsProvider = async () => {
+    adapter.rootsProvider = () => {
       call += 1;
       return { items: [makeComment({ id: `h${call}` })], next: 'same-offset' };
     };
