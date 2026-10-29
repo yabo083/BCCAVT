@@ -197,7 +197,7 @@ describe('嵌入阅读器的写链路', () => {
   it('回复：桥请求带成对的 root / parent，成功后把返回的评论插进树', async () => {
     const wrapper = await open();
     const row = wrapper.findAll('.comment-row')[0]!;
-    await row.findAll('.act')[1]!.trigger('click');
+    await row.findAll('.act')[2]!.trigger('click');
     await row.get('.reply textarea').setValue('同意');
     await row.get('.reply .send').trigger('click');
 
@@ -223,7 +223,7 @@ describe('嵌入阅读器的写链路', () => {
   it('回复失败：草稿留着并就地提示', async () => {
     const wrapper = await open();
     const row = wrapper.findAll('.comment-row')[0]!;
-    await row.findAll('.act')[1]!.trigger('click');
+    await row.findAll('.act')[2]!.trigger('click');
     await row.get('.reply textarea').setValue('这条会失败');
     await row.get('.reply .send').trigger('click');
 

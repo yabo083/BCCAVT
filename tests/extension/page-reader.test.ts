@@ -432,7 +432,7 @@ describe('写意图路由（iframe → 内容脚本）', () => {
 
     dispatchWrite(likeRequest, target, 'https://evil.example');
     dispatchWrite({ ...likeRequest, source: 'other' }, target);
-    dispatchWrite({ ...likeRequest, op: 'delete' }, target);
+    dispatchWrite({ ...likeRequest, op: 'report' }, target);
     dispatchWrite({ ...likeRequest, requestId: '' }, target);
     dispatchWrite('loupe:reader-write', target);
     await flush();

@@ -40,6 +40,7 @@
 
 ## 关键决策（为何这样设计）
 
+- **写能力**：`PlatformWrites` = `likeComment` / `dislikeComment`（hate 端点）/ `deleteComment` / `replyComment`（`platform.ts`）；`Comment` 正文引用字段 `mentions` / `jumps` 与视角态 `disliked` 由适配器归一化（`model.ts`）。
 - **页缓存键 = 账号 + 排序 + 定位三维**：键 = `cacheKey('page', subjectKey(ref), account, 'roots'|'thread', …)`（`crawl.ts#crawlSubject`、`crawl.ts#crawlRootsPage`、`crawl.ts#crawlThreadPages`），`account = loggedIn ? 'u:<id>' : 'anon'`。roots 页键在 cursor 前再带一个 `order` 段（`'time'`/`'hot'`，`report.ts#rootOrderOf` 缺省 `'time'`）：两种排序各自成链，互不共吃缓存。定位读取走 `'seek'` 键（`cacheKey('page', subjectKey(ref), account, 'seek', commentId)`），刻意不写成 `'roots|start'`——定位块不是第一页。
 - **session/nav 键带身份姿态**：`cacheKey('session', adapter.id, identity)`（`workbench.ts#loadSession`、`#session`、`#canReuseSnapshot`）与 `cacheKey('bilibili','nav', ctx.identity)`（`api.ts#loadNavData`），`identity` 来自 `HttpClient.identity`（`'direct'`/ `'page'`，`platform.ts#HttpClient`），经 `CrawlRunner.request` 注入 `FetchContext.identity`。同一份物理缓存下页面桥与扩展源直连各读各的登录态；WBI 密钥与身份无关，键保持全局。
 - **`next === null` 是「到底」的唯一权威判据**：否掉了「请求 N 条只回更少 = 没有下一页」的客户端算术推断——平台截断与真到底不可区分（`report.ts:222-224`；ADR-0003）。

@@ -11,9 +11,16 @@ import IconArrowSquareOut from '~icons/ph/arrow-square-out';
 import IconSlidersHorizontal from '~icons/ph/sliders-horizontal';
 import IconWarningCircle from '~icons/ph/warning-circle';
 import PalettePicker from './components/PalettePicker.vue';
-import { PAGE_COMMENTS_ENABLED_KEY } from '@/extension/page-comments';
+import { PAGE_COMMENTS_ENABLED_KEY, READER_DEFAULT_ORDER_KEY } from '@/extension/page-comments';
 
 const enabled = ref(false);
+const defaultHot = ref(true);
+async function onOrderToggle(event: Event): Promise<void> {
+  const next = (event.target as HTMLInputElement).checked;
+  const previous = defaultHot.value;
+  defaultHot.value = next;
+  if (!(await persist(READER_DEFAULT_ORDER_KEY, next ? 'hot' : 'time'))) defaultHot.value = previous;
+}
 /** 读盘完成前禁用控件，避免用默认值把用户真实设置覆盖掉。 */
 const ready = ref(false);
 /** 写入进行中：禁用控件，避免并发写入把回滚建立在一个已被新值覆盖的前值上。 */
@@ -67,8 +74,9 @@ async function openWorkbench(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const bag = await chrome.storage.local.get(PAGE_COMMENTS_ENABLED_KEY);
+    const bag = await chrome.storage.local.get([PAGE_COMMENTS_ENABLED_KEY, READER_DEFAULT_ORDER_KEY]);
     enabled.value = bag[PAGE_COMMENTS_ENABLED_KEY] === true;
+    defaultHot.value = bag[READER_DEFAULT_ORDER_KEY] !== 'time';
     ready.value = true;
     chrome.storage.onChanged.addListener(onStorageChanged);
   } catch (cause) {
@@ -102,6 +110,13 @@ onBeforeUnmount(() => chrome.storage.onChanged.removeListener(onStorageChanged))
       >
         <span class="config-name">自绘评论区</span>
         <input class="switch" type="checkbox" :checked="enabled" :disabled="!ready || saving" @change="onToggle" />
+      </label>
+      <label
+        class="config-row clickable"
+        title="自绘评论区打开时默认按最热排序（与原生一致）；关闭则默认按最新。只对下一次打开生效，评论区里的「最热 | 最新」切换不受影响"
+      >
+        <span class="config-name">评论区默认按最热</span>
+        <input class="switch" type="checkbox" :checked="defaultHot" :disabled="!ready || saving" @change="onOrderToggle" />
       </label>
     </section>
 

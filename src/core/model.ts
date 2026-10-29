@@ -73,6 +73,12 @@ export interface Comment {
   byCreator?: boolean;
   /** 创作者点赞过。 */
   creatorLiked?: boolean;
+  /** 当前用户已点踩（平台 action=2）。 */
+  disliked?: boolean;
+  /** 正文里 @ 提及的用户（members / at_name_to_mid），profileUrl 与 Author.profileUrl 同形。 */
+  mentions?: { name: string; profileUrl: string }[];
+  /** 正文里的跳转关键词（jump_url）：只收 http(s) 链接，非法项在边界被丢弃。 */
+  jumps?: { keyword: string; url: string }[];
   /**
    * 正文里出现的表情 token（如 `[支持]`）→ 图片。仅当平台确实给了合法表情时才存在；
    * 未知 token 原样按文本渲染，所以这里缺失也不影响正文可读性。

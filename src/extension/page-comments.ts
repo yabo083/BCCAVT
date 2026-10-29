@@ -27,6 +27,8 @@ import { isCommentId } from './messages';
  * 点赞 / 回复 / 发表都经阅读器桥交回内容脚本执行；关闭即精确还原原生评论区。
  */
 export const PAGE_COMMENTS_ENABLED_KEY = 'loupe.pageComments.enabled';
+/** 阅读器顶层排序默认：'hot'（最热，与原生一致）| 'time'（最新）。不改已打开的阅读器，只对下一次加载生效。 */
+export const READER_DEFAULT_ORDER_KEY = 'loupe.reader.defaultOrder';
 
 /** 嵌入页 → 后台：请求当前标签页的规范视频地址。只信 sender，绝不读页面 query 或页面消息。 */
 export const EMBEDDED_CONTEXT = 'loupe:embedded-context';
@@ -262,8 +264,8 @@ export const READER_WRITE_REQUEST = 'loupe:reader-write';
 /** 内容脚本 → 嵌入页：上面那次写的结果（成功/失败，成功回复时带新评论）。 */
 export const READER_WRITE_RESULT = 'loupe:reader-write-result';
 
-/** 写意图：点赞、取消点赞、回复（不带 rootId/parentId 即发表新的顶层评论）。 */
-export type ReaderWriteOp = 'like' | 'unlike' | 'reply';
+/** 写意图：点赞、取消点赞、点踩、取消点踩、删除自己的评论、回复（不带 rootId/parentId 即发表新的顶层评论）。 */
+export type ReaderWriteOp = 'like' | 'unlike' | 'dislike' | 'undislike' | 'delete' | 'reply';
 
 /**
  * 正文长度上限（与 B 站 `message` 上限一致，也用作输入框的 maxlength）。
@@ -312,7 +314,7 @@ export function isReaderWriteRequest(value: unknown): value is ReaderWriteReques
   if (!isReaderBridgeMessage(value, READER_WRITE_REQUEST)) return false;
   const { requestId, op, commentId, rootId, parentId, text } = value as Partial<ReaderWriteRequest>;
   if (!isReaderRequestId(requestId)) return false;
-  if (op === 'like' || op === 'unlike') {
+  if (op === 'like' || op === 'unlike' || op === 'dislike' || op === 'undislike' || op === 'delete') {
     return isCommentId(commentId) && rootId === undefined && parentId === undefined && text === undefined;
   }
   if (op !== 'reply' || commentId !== undefined) return false;

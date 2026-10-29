@@ -107,7 +107,14 @@ export function createReaderWriteExecutor(adapter: PlatformAdapter): ReaderWrite
         );
         return { ...base, ok: true, comment };
       }
-      await writes.likeComment({ subject, commentId: required(request.commentId, 'commentId'), action: request.op }, { csrf });
+      const commentId = required(request.commentId, 'commentId');
+      if (request.op === 'like' || request.op === 'unlike') {
+        await writes.likeComment({ subject, commentId, action: request.op }, { csrf });
+      } else if (request.op === 'dislike' || request.op === 'undislike') {
+        await writes.dislikeComment({ subject, commentId, action: request.op }, { csrf });
+      } else {
+        await writes.deleteComment({ subject, commentId }, { csrf });
+      }
       return { ...base, ok: true };
     } catch (error) {
       return { ...base, ok: false, error: failureText(error) };

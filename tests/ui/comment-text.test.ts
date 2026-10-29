@@ -59,7 +59,7 @@ describe('tokenizeComment', () => {
     const segments = tokenizeComment(text, EMOTES);
     expect(segments[0]).toEqual({ kind: 'text', text: leading });
     expect(segments.filter((segment) => segment.kind === 'emote')).toHaveLength(1);
-    expect(segments.map((segment) => (segment.kind === 'text' ? segment.text : segment.token)).join('')).toBe(text);
+    expect(segments.map((segment) => (segment.kind === 'text' ? segment.text : segment.kind === 'emote' ? segment.token : segment.text)).join('')).toBe(text);
   });
 
   it('HTML 只作为文本，不产生任何结构', () => {
@@ -107,5 +107,41 @@ describe('splitMention', () => {
     const { mention, body } = splitMention(raw);
     expect(mention).toBeNull();
     expect(body).toBe(raw);
+  });
+});
+
+describe('tokenizeComment：链接段', () => {
+  const REFS = { mentions: [{ name: '阿蓝', profileUrl: 'https://space.bilibili.com/9' }], jumps: [{ keyword: '看这里', url: 'https://b23.tv/x' }] };
+  it('@提及 → profileUrl 链接段', () => {
+    expect(tokenizeComment('去 @阿蓝 家看', undefined, REFS)).toEqual([
+      { kind: 'text', text: '去 ' },
+      { kind: 'link', text: '@阿蓝', url: 'https://space.bilibili.com/9' },
+      { kind: 'text', text: ' 家看' },
+    ]);
+  });
+  it('jump 关键词 → 链接段', () => {
+    expect(tokenizeComment('请看这里哦', undefined, REFS)).toEqual([
+      { kind: 'text', text: '请' },
+      { kind: 'link', text: '看这里', url: 'https://b23.tv/x' },
+      { kind: 'text', text: '哦' },
+    ]);
+  });
+  it('裸 http(s) URL → 链接段；非 http 协议不变链接', () => {
+    expect(tokenizeComment('戳 https://example.com/a?b=1 看看', undefined, undefined)).toEqual([
+      { kind: 'text', text: '戳 ' },
+      { kind: 'link', text: 'https://example.com/a?b=1', url: 'https://example.com/a?b=1' },
+      { kind: 'text', text: ' 看看' },
+    ]);
+    expect(tokenizeComment('javascript:x', undefined, undefined)).toEqual([{ kind: 'text', text: 'javascript:x' }]);
+  });
+  it('表情优先：与表情重叠的关键词不吃掉表情 token', () => {
+    const segs = tokenizeComment('[支持]阿蓝', { '[支持]': { url: 'https://i0.hdslb.com/bfs/emote/x.png' } }, { jumps: [{ keyword: '支持]阿', url: 'https://x' }] });
+    expect(segs[0]).toMatchObject({ kind: 'emote', token: '[支持]' });
+  });
+  it('「回复 @某人：」前缀 pill 由 splitMention 处理，正文里的 @提及 仍出链接段', () => {
+    const { mention, body } = splitMention('回复 @阿蓝：好耶');
+    expect(mention).toBe('阿蓝');
+    expect(tokenizeComment('好耶 @阿蓝', undefined, REFS).map((s) => s.kind)).toEqual(['text', 'link']);
+    expect(body).toBe('好耶');
   });
 });

@@ -13,6 +13,8 @@ import { cacheKey } from '../../core/cache/types';
 import { PlatformError, type PlatformErrorKind } from '../../core/errors';
 import type { Author, Comment, RootOrder, Session, Subject, SubjectRef } from '../../core/model';
 import type {
+  DeleteCommentInput,
+  DislikeCommentInput,
   FetchContext,
   HttpClient,
   LikeCommentInput,
@@ -338,6 +340,24 @@ export function createBilibiliWrites(http: HttpClient): PlatformWrites {
         },
         http,
       );
+    },
+
+    /** 点踩 / 取消：POST /x/v2/reply/hate，action=1 点踩、0 取消。 */
+    async dislikeComment(input: DislikeCommentInput, auth: WriteAuth): Promise<void> {
+      const csrf = requireCsrf(auth);
+      const locator = locatorOf(input.subject);
+      await postWrite(
+        `${API_BASE}/x/v2/reply/hate`,
+        { oid: locator.oid, type: String(locator.type), rpid: input.commentId, action: input.action === 'dislike' ? '1' : '0', csrf },
+        http,
+      );
+    },
+
+    /** 删除自己的评论：POST /x/v2/reply/del。 */
+    async deleteComment(input: DeleteCommentInput, auth: WriteAuth): Promise<void> {
+      const csrf = requireCsrf(auth);
+      const locator = locatorOf(input.subject);
+      await postWrite(`${API_BASE}/x/v2/reply/del`, { oid: locator.oid, type: String(locator.type), rpid: input.commentId, csrf }, http);
     },
 
     /** 发表 / 回复：POST /x/v2/reply/add，成功返回归一化的新评论。 */

@@ -3,7 +3,7 @@
  * 这里负责把字符串 id、秒级时间戳、IP 属地前缀等平台细节抹平。
  */
 import type { Author, Comment, Emote } from '../../core/model';
-import { asRecord, idField, numField, optNum, optionalRecord, optStr, strField } from './raw';
+import { asRecord, idField, numField, optId, optNum, optionalRecord, optStr, strField } from './raw';
 import type { RawObject } from './raw';
 
 export interface ReplyOptions {
@@ -138,5 +138,39 @@ export function normalizeReply(raw: unknown, options: ReplyOptions = {}): Commen
   if (options.pinned) comment.pinned = true;
   if (options.upperMid !== undefined) comment.byCreator = mid === options.upperMid;
   if (optionalRecord(reply['up_action'])?.['like'] === true) comment.creatorLiked = true;
+  // action: 0 无操作 1 已赞 2 已踩（当前用户视角，不做进 liked 会话态——阅读器对赞只跟踪本次会话）
+  if (optNum(reply, 'action') === 2) comment.disliked = true;
+  // members / at_name_to_mid → 正文 @ 提及的主页链接（与 Author.profileUrl 同形）
+  const mentionMap = new Map<string, string>();
+  const members = content['members'];
+  if (Array.isArray(members)) {
+    for (const m of members) {
+      const rec = optionalRecord(m);
+      if (!rec) continue;
+      const mid = optId(rec, 'mid');
+      const name = optStr(rec, 'uname') ?? '';
+      if (mid !== undefined && /^\d+$/.test(mid) && name !== '') mentionMap.set(name, `https://space.bilibili.com/${mid}`);
+    }
+  }
+  const atMap = optionalRecord(content['at_name_to_mid']);
+  if (atMap) {
+    for (const [name, midRaw] of Object.entries(atMap)) {
+      const mid = String(midRaw);
+      if (name !== '' && /^\d+$/.test(mid)) mentionMap.set(name, `https://space.bilibili.com/${mid}`);
+    }
+  }
+  if (mentionMap.size > 0) comment.mentions = [...mentionMap.entries()].map(([name, profileUrl]) => ({ name, profileUrl }));
+  // jump_url: {<kw>: {title, pc_url, ...}} → 正文关键词的跳转链接；只收 http(s)，其余整条丢弃
+  const jumpMap = optionalRecord(content['jump_url']);
+  if (jumpMap) {
+    const jumps: { keyword: string; url: string }[] = [];
+    for (const [keyword, value] of Object.entries(jumpMap)) {
+      if (keyword === '') continue;
+      const rec = optionalRecord(value);
+      const candidate = typeof rec?.['pc_url'] === 'string' ? rec['pc_url'] : keyword;
+      if (/^https?:\/\//i.test(candidate)) jumps.push({ keyword, url: candidate });
+    }
+    if (jumps.length > 0) comment.jumps = jumps;
+  }
   return comment;
 }

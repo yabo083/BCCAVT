@@ -8,8 +8,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlatformError } from '@/core/errors';
 import type { Comment, PlatformId, Subject } from '@/core/model';
-import type { HeaderRewrite, LikeCommentInput, PlatformAdapter, PlatformWrites, Politeness, ReplyCommentInput, WriteAuth } from '@/core/platform';
-import { READER_BRIDGE_SOURCE, READER_WRITE_REQUEST, READER_WRITE_RESULT, type ReaderWriteRequest } from '@/extension/page-comments';
+import type { DeleteCommentInput, DislikeCommentInput, HeaderRewrite, LikeCommentInput, PlatformAdapter, PlatformWrites, Politeness, ReplyCommentInput, WriteAuth } from '@/core/platform';
+import { isReaderWriteRequest, READER_BRIDGE_SOURCE, READER_WRITE_REQUEST, READER_WRITE_RESULT, type ReaderWriteRequest } from '@/extension/page-comments';
 import { createReaderWriteExecutor } from '@/extension/content/reader-writes';
 
 const VIDEO_URL = 'https://www.bilibili.com/video/BV1TEST/';
@@ -49,6 +49,8 @@ class WriteFakeAdapter implements PlatformAdapter {
   readonly writeFailures: PlatformError[] = [];
   readonly likeCalls: LikeCommentInput[] = [];
   readonly replyCalls: ReplyCommentInput[] = [];
+  readonly dislikeCalls: DislikeCommentInput[] = [];
+  readonly deleteCalls: DeleteCommentInput[] = [];
   /** 写层收到的鉴权包：用来证明 csrf 是从 cookie 现读后原样传下去的。 */
   readonly auths: WriteAuth[] = [];
   subjectCalls = 0;
@@ -57,6 +59,8 @@ class WriteFakeAdapter implements PlatformAdapter {
     this.writes = canWrite
       ? {
           likeComment: async (input, auth) => this.runWrite(input, auth),
+          dislikeComment: async (input, auth) => { this.auths.push(auth); this.dislikeCalls.push(input); const f = this.writeFailures.shift(); if (f) throw f; },
+          deleteComment: async (input, auth) => { this.auths.push(auth); this.deleteCalls.push(input); const f = this.writeFailures.shift(); if (f) throw f; },
           replyComment: async (input, auth) => {
             await this.runWrite(input, auth);
             return NEW_COMMENT;
@@ -223,5 +227,29 @@ describe('写执行器', () => {
     const retried = await execute(writeRequest({ op: 'like', commentId: '1' }));
     expect(retried.ok).toBe(true);
     expect(adapter.subjectCalls).toBe(2);
+  });
+});
+
+describe('点踩 / 删除', () => {
+  it('dislike → dislikeComment action=dislike；undislike → undislike；csrf 不进结果', async () => {
+    await createReaderWriteExecutor(adapter)(writeRequest({ op: 'dislike', commentId: '1' }));
+    await createReaderWriteExecutor(adapter)(writeRequest({ op: 'undislike', commentId: '2' }));
+    expect(adapter.dislikeCalls.map((c) => [c.commentId, c.action])).toEqual([['1','dislike'],['2','undislike']]);
+    expect(adapter.auths.every((a) => a.csrf === CSRF)).toBe(true);
+  });
+  it('delete → deleteComment', async () => {
+    const r = await createReaderWriteExecutor(adapter)(writeRequest({ op: 'delete', commentId: '9' }));
+    expect(r.ok).toBe(true);
+    expect(adapter.deleteCalls).toEqual([{ subject: SUBJECT, commentId: '9' }]);
+  });
+  it.each([
+    [{ op: 'dislike', commentId: '1' }, true],
+    [{ op: 'undislike', commentId: '1' }, true],
+    [{ op: 'delete', commentId: '1' }, true],
+    [{ op: 'dislike' }, false],
+    [{ op: 'delete', text: 'x' }, false],
+    [{ op: 'delete', rootId: '1' }, false],
+  ])('isReaderWriteRequest %j → %s', (req, ok) => {
+    expect(isReaderWriteRequest({ source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId: 'r', ...req })).toBe(ok);
   });
 });

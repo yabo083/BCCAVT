@@ -27,6 +27,9 @@ import IconChatCenteredText from '~icons/ph/chat-centered-text';
 import IconGraph from '~icons/ph/graph';
 import IconMapPin from '~icons/ph/map-pin';
 import IconThumbsUp from '~icons/ph/thumbs-up';
+import IconThumbsDown from '~icons/ph/thumbs-down';
+import IconThumbsDownFill from '~icons/ph/thumbs-down-fill';
+import IconDotsThree from '~icons/ph/dots-three';
 import CommentComposer from './CommentComposer.vue';
 import CommentText from './CommentText.vue';
 import { splitMention } from '../comment-text';
@@ -43,12 +46,19 @@ const props = defineProps<{
   reply?: RowReplyState | null;
   selected?: boolean;
   busy?: boolean;
+  /** 主体规范地址：复制链接菜单项拼 `${subjectUrl}#reply<id>`。 */
+  subjectUrl?: string;
+  /** 当前登录用户 id：等于评论作者时才显示「删除」菜单项；未给出 = 永不显示删除。 */
+  sessionUserId?: string | null;
 }>();
 const emit = defineEmits<{
   select: [id: string];
   fold: [id: string];
   analyze: [id: string];
   'toggle-like': [id: string];
+  'toggle-dislike': [id: string];
+  'copy-link': [id: string];
+  'delete-comment': [id: string];
   'open-reply': [id: string];
   'close-reply': [id: string];
   'reply-input': [id: string, text: string];
@@ -64,6 +74,48 @@ const emit = defineEmits<{
  * 悬停作者：把头像/昵称的当前位置报给父级；离开时 `rect: null`（同样带上 mid——收起的范围就是这位作者）。
  * 位置用**嵌入文档坐标系**（iframe 内部不滚动，等价于 iframe 视口坐标），由内容脚本换算到宿主坐标系。
  */
+/** 更多菜单：复制链接 / 删除（仅自己的评论，两段确认）。外部点击 / Esc 关闭。 */
+const menuOpen = ref(false);
+const deleteArmed = ref(false);
+const menuAnchor = ref<HTMLElement | null>(null);
+const canDelete = computed(
+  () => props.sessionUserId !== undefined && props.sessionUserId !== null && props.sessionUserId === comment.value.author.id,
+);
+function closeMenu(): void {
+  menuOpen.value = false;
+  deleteArmed.value = false;
+}
+function toggleMenu(): void {
+  if (menuOpen.value) {
+    closeMenu();
+    return;
+  }
+  menuOpen.value = true;
+  const onDown = (event: Event): void => {
+    if (event.target instanceof Node && menuAnchor.value?.contains(event.target)) return;
+    closeMenu();
+    document.removeEventListener('click', onDown, true);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') closeMenu();
+  };
+  document.addEventListener('click', onDown, true);
+  document.addEventListener('keydown', onKey);
+}
+function copyLink(): void {
+  closeMenu();
+  emit('copy-link', props.row.id);
+}
+function confirmDelete(): void {
+  if (!deleteArmed.value) {
+    deleteArmed.value = true;
+    return;
+  }
+  closeMenu();
+  emit('delete-comment', props.row.id);
+}
+
 function hoverUser(event: Event, entering: boolean): void {
   // 没有主页地址的作者不参与卡片交互（元素是 span，不是链接）
   if (profileUrl.value === null) return;
@@ -213,7 +265,7 @@ function toggleReply(): void {
           <span v-if="props.busy" class="meta">加载中...</span>
         </div>
 
-        <p class="text"><CommentText :text="parsedComment.body" :emotes="comment.emotes" /></p>
+        <p class="text"><CommentText :text="parsedComment.body" :emotes="comment.emotes" :mentions="comment.mentions" :jumps="comment.jumps" /></p>
 
         <div class="foot">
           <span class="meta time">{{ formatRelative(comment.createdAt) }}</span>
@@ -228,6 +280,17 @@ function toggleReply(): void {
             @click.stop="emit('toggle-like', props.row.id)"
           >
             <IconThumbsUp /><span ref="likeNum" class="tnum">{{ formatCount(props.like.count) }}</span>
+          </button>
+          <button
+            type="button"
+            class="act dislike"
+            :class="{ disliked: props.like.disliked }"
+            :disabled="props.like.busy"
+            :aria-pressed="props.like.disliked"
+            :title="props.like.disliked ? '取消点踩' : '点踩'"
+            @click.stop="emit('toggle-dislike', props.row.id)"
+          >
+            <IconThumbsDownFill v-if="props.like.disliked" /><IconThumbsDown v-else />
           </button>
           <button
             type="button"
@@ -255,6 +318,30 @@ function toggleReply(): void {
             {{ formatCount(props.row.node.size - 1) }} 条回复
           </span>
           <span class="grow" />
+          <span ref="menuAnchor" class="more-wrap">
+            <button
+              type="button"
+              class="act icon-act"
+              title="更多"
+              aria-label="更多"
+              :aria-expanded="menuOpen"
+              @click.stop="toggleMenu"
+            >
+              <IconDotsThree />
+            </button>
+            <div v-if="menuOpen" class="more-menu" role="menu" @click.stop>
+              <button type="button" class="more-item" role="menuitem" @click.stop="copyLink">复制链接</button>
+              <button
+                v-if="canDelete"
+                type="button"
+                class="more-item danger"
+                role="menuitem"
+                @click.stop="confirmDelete"
+              >
+                {{ deleteArmed ? '确认删除' : '删除' }}
+              </button>
+            </div>
+          </span>
           <button
             type="button"
             class="act analyze"
@@ -680,6 +767,55 @@ a.name:hover {
 }
 
 /* 点赞选中：强调色胶囊 + 图标弹簧 */
+/* 点踩按钮：与 like 同款行内动作，激活态走同一描边/着色逻辑。 */
+.act.dislike.disliked {
+  color: var(--fg);
+}
+
+.act.dislike.disliked svg {
+  color: var(--accent);
+}
+
+/* 更多菜单：行动作行右端的 dots 按钮 + 小浮层。 */
+.more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--sp-1));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: var(--sp-1) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-1, 0 4px 16px rgb(0 0 0 / 0.18));
+}
+
+.more-item {
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.more-item:hover {
+  background: var(--surface-2);
+}
+
+.more-item.danger {
+  color: var(--danger, #d45b5b);
+}
+
 .act.like.liked {
   background: var(--accent-bg);
   color: var(--accent-strong);

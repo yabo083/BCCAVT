@@ -78,6 +78,8 @@ interface RowOptions {
   reply?: RowReplyState | null;
   selected?: boolean;
   busy?: boolean;
+  subjectUrl?: string;
+  sessionUserId?: string;
   /** 挂进 document.body：happy-dom 只对在文档树里的元素算样式，几何断言必须挂上去。 */
   attached?: boolean;
 }
@@ -87,10 +89,12 @@ function mountRow(options: RowOptions = {}) {
     attachTo: options.attached ? document.body : undefined,
     props: {
       row: options.row ?? makeRow(),
-      like: options.like ?? { count: 12, liked: false, busy: false },
+      like: options.like ?? { count: 12, liked: false, disliked: false, busy: false },
       reply: options.reply ?? null,
       selected: options.selected ?? false,
       busy: options.busy ?? false,
+      subjectUrl: options.subjectUrl,
+      sessionUserId: options.sessionUserId,
     },
   });
 }
@@ -127,7 +131,7 @@ describe('点赞', () => {
     expect(plain.get('.act.like').text()).toBe('12');
     expect(plain.get('.act.like').attributes('aria-pressed')).toBe('false');
 
-    const liked = mountRow({ like: { count: 13, liked: true, busy: false } });
+    const liked = mountRow({ like: { count: 13, liked: true, disliked: false, busy: false } });
     expect(liked.get('.act.like').text()).toBe('13');
     expect(liked.get('.act.like').attributes('aria-pressed')).toBe('true');
     expect(liked.get('.act.like').classes()).toContain('liked');
@@ -139,7 +143,7 @@ describe('点赞', () => {
     expect(wrapper.emitted('toggle-like')?.[0]).toEqual(['c1']);
     expect(wrapper.emitted('select')).toBeUndefined();
 
-    const busy = mountRow({ like: { count: 12, liked: false, busy: true } });
+    const busy = mountRow({ like: { count: 12, liked: false, disliked: false, busy: true } });
     expect(busy.get('.act.like').attributes('disabled')).toBeDefined();
   });
 
@@ -153,13 +157,13 @@ describe('点赞', () => {
 describe('回复框', () => {
   it('点回复按钮收起/展开只上报状态，不触发选中（受控：父级不回填抽屉就不开）', async () => {
     const wrapper = mountRow();
-    await wrapper.findAll('.act')[1]!.trigger('click');
+    await wrapper.findAll('.act')[2]!.trigger('click');
     expect(wrapper.emitted('open-reply')?.[0]).toEqual(['c1']);
     expect(wrapper.emitted('select')).toBeUndefined();
     expect(wrapper.get('.reply-drawer-accordion').classes()).not.toContain('is-open');
 
     const open = mountRow({ reply: { text: '草稿', sending: false, error: null } });
-    await open.findAll('.act')[1]!.trigger('click');
+    await open.findAll('.act')[2]!.trigger('click');
     expect(open.emitted('close-reply')?.[0]).toEqual(['c1']);
   });
 
@@ -417,3 +421,32 @@ describe('UP 作者头像与「回复 @某人」前缀', () => {
   });
 });
 
+
+describe('点踩与更多菜单', () => {
+  it('点踩按钮发意图、激活态样式、busy 禁用', async () => {
+    const w = mountRow({ like: { count: 5, liked: false, disliked: true, busy: false } });
+    const btn = w.get('.act.dislike');
+    expect(btn.classes()).toContain('disliked');
+    await btn.trigger('click');
+    expect(w.emitted('toggle-dislike')?.[0]).toEqual(['c1']);
+    const busy = mountRow({ like: { count: 5, liked: false, disliked: false, busy: true } });
+    expect(busy.get('.act.dislike').attributes('disabled')).toBeDefined();
+  });
+  it('复制链接发 copy-link；删除只对作者本人显示且两段确认', async () => {
+    const other = mountRow({ row: makeRow() });
+    await other.get('[aria-label="更多"]').trigger('click');
+    expect(other.findAll('.more-item')).toHaveLength(1);
+    const own = mountRow({ subjectUrl: 'https://www.bilibili.com/video/BV1x', sessionUserId: 'u1' });
+    await own.get('[aria-label="更多"]').trigger('click');
+    const items = own.findAll('.more-item');
+    expect(items).toHaveLength(2);
+    await items[0]!.trigger('click');
+    expect(own.emitted('copy-link')?.[0]).toEqual(['c1']);
+    await own.get('[aria-label="更多"]').trigger('click');
+    await own.findAll('.more-item')[1]!.trigger('click');
+    expect(own.emitted('delete-comment')).toBeUndefined();
+    expect(own.text()).toContain('确认删除');
+    await own.findAll('.more-item')[1]!.trigger('click');
+    expect(own.emitted('delete-comment')?.[0]).toEqual(['c1']);
+  });
+});

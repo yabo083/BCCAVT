@@ -55,6 +55,8 @@ import {
   commentIntent,
   commentTextError,
   createWriteClient,
+  deleteIntent,
+  dislikeIntent,
   likeIntent,
   mergeComments,
   replyIntent,
@@ -63,6 +65,7 @@ import type { RowLikeState, RowReplyState } from './reader-comments';
 import {
   EMBEDDED_CONTEXT,
   PAGE_COMMENTS_ENABLED_KEY,
+  READER_DEFAULT_ORDER_KEY,
   READER_BRIDGE_SOURCE,
   READER_HEIGHT,
   READER_NAVIGATION,
@@ -146,6 +149,14 @@ const expanding = ref<ReadonlySet<string>>(new Set<string>());
 const added = shallowRef<readonly Comment[]>([]);
 /** 本会话点赞过的评论 id：模型里没有「我点过赞」，显示态只能由这里叠加。 */
 const liked = shallowRef<ReadonlySet<string>>(new Set<string>());
+/** 本次会话点踩过的评论 id：与 liked 互斥；平台 action=2 的初始态在 likeStateOf 里合进来。 */
+const disliked = shallowRef<ReadonlySet<string>>(new Set<string>());
+/** 本次会话「取消点踩」过的评论 id：覆盖平台带回来的 disliked 初始态。 */
+const undisliked = shallowRef<ReadonlySet<string>>(new Set<string>());
+/** 删除成功后从视图剔除的评论 id：整棵子树随合流层一起消失。 */
+const removed = shallowRef<ReadonlySet<string>>(new Set<string>());
+/** 当前登录用户 mid：只有自己的评论才显示「删除」。session 只在首次进入时取一次。 */
+const sessionUserId = shallowRef<string | null>(null);
 /** 点赞请求在飞的评论 id。 */
 const likeBusy = shallowRef<ReadonlySet<string>>(new Set<string>());
 /** 草稿：键是评论 id，顶层评论用 NEW_COMMENT_KEY。 */
@@ -174,6 +185,9 @@ const located = shallowRef<{ root: Comment; comments: Comment[] } | null>(null);
  * 所以来回切换直接命中各自缓存。不持久化、不设选项。
  */
 const order = ref<RootOrder>('hot');
+if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+  void chrome.storage.local.get(READER_DEFAULT_ORDER_KEY).then((bag) => { const v = bag?.[READER_DEFAULT_ORDER_KEY]; if (v === 'time' || v === 'hot') order.value = v; }).catch(() => {});
+}
 
 /**
  * 游标分页状态机：它自己不是响应式的，变化时换成一份状态快照存进 pagerState。
@@ -251,9 +265,14 @@ const writes = createWriteClient((request) => window.parent.postMessage(request,
  * 展示用的评论 = 已取回的各页 + 按需抓到的回复 + 本次会话新写的评论（按 id 去重，后写的优先）。
  * `mergeComments` 保留**首次出现的位置**，所以这个数组就是「取回顺序」= 平台游标顺序，后到的排在后。
  */
-const merged = computed<readonly Comment[]>(() =>
-  mergeComments(pagerState.value.items, ...loaded.value.values(), added.value),
-);
+const merged = computed<readonly Comment[]>(() => {
+  const gone = removed.value;
+  return mergeComments(
+    pagerState.value.items.filter((c) => !gone.has(c.id) && (c.rootId === null || !gone.has(c.rootId))),
+    ...[...loaded.value.values()].map((list: readonly Comment[]) => list.filter((c: Comment) => !gone.has(c.id) && (c.rootId === null || !gone.has(c.rootId)))),
+    added.value.filter((c) => !gone.has(c.id) && (c.rootId === null || !gone.has(c.rootId))),
+  );
+});
 /** 森林：层级 / depth / size / byId 都由它给，但**顶层顺序不取它**（见 roots）。 */
 const forest = computed<Forest | null>(() => (merged.value.length === 0 ? null : buildForest([...merged.value])));
 /**
@@ -491,6 +510,14 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
     if (resolved === null) throw new Error('无法把当前地址识别为 B 站视频，请在视频页使用');
     // 解析成功即记账：这次取数认的就是这个目标（之后 URL 怎么抖，身份都不会变）
     targetId = identityOf(resolved.target.subject);
+    if (sessionUserId.value === null) {
+      // 登录用户 mid 只取一次：「删除」菜单项只在评论作者 === 自己时出现
+      void Promise.resolve(readerWorkbench.session?.(resolved.adapter.id, abort.signal))
+        .then((s) => {
+          sessionUserId.value = s.user?.id ?? null;
+        })
+        .catch(() => {});
+    }
     const options: CrawlOptions = { refresh, maxRoots: 0, maxRepliesPerThread: PAGE_REPLIES, order: order.value };
     const page = await readerWorkbench.previewRootsPage(
       resolved.target.subject,
@@ -573,6 +600,9 @@ async function resetTarget(): Promise<void> {
   loaded.value = new Map<string, readonly Comment[]>();
   added.value = [];
   liked.value = new Set<string>();
+  disliked.value = new Set<string>();
+  undisliked.value = new Set<string>();
+  removed.value = new Set<string>();
   likeBusy.value = new Set<string>();
   drafts.value = new Map<string, string>();
   sending.value = new Set<string>();
@@ -914,6 +944,59 @@ async function submitComment(target: Comment | null, text: string): Promise<void
   await revealWritten(created);
 }
 
+/** 点踩 / 取消点踩：与点赞互斥（原生同款）——踩一个赞过的评论先取消赞（计数乐观回落）。 */
+async function toggleDislike(id: string): Promise<void> {
+  if (stale.value || likeBusy.value.has(id)) return;
+  const was = disliked.value.has(id) || (commentOf(id)?.disliked === true && !undisliked.value.has(id));
+  likeBusy.value = withId(likeBusy.value, id, true);
+  if (was) {
+    disliked.value = withId(disliked.value, id, false);
+    undisliked.value = withId(undisliked.value, id, true);
+  } else {
+    disliked.value = withId(disliked.value, id, true);
+    undisliked.value = withId(undisliked.value, id, false);
+    // 互斥：赞过就先撤掉赞（计数回到 comment.likes）
+    liked.value = withId(liked.value, id, false);
+  }
+  const outcome = await writes.send(dislikeIntent(id, was));
+  likeBusy.value = withId(likeBusy.value, id, false);
+  if (!outcome.ok) {
+    if (was) {
+      undisliked.value = withId(undisliked.value, id, false);
+      disliked.value = withId(disliked.value, id, true);
+    } else {
+      disliked.value = withId(disliked.value, id, false);
+      undisliked.value = withId(undisliked.value, id, false);
+    }
+    notice.value = { tone: 'error', text: outcome.error ?? (was ? '取消点踩失败' : '点踩失败') };
+  }
+}
+
+/** 复制评论链接：${subject.url}#reply<id>；成功给一个短提示。 */
+async function copyCommentLink(id: string): Promise<void> {
+  const url = subject.value?.url;
+  if (url === undefined) return;
+  try {
+    await navigator.clipboard.writeText(`${url}#reply${id}`);
+    notice.value = { tone: 'info', text: '已复制链接' };
+  } catch {
+    notice.value = { tone: 'error', text: '复制失败，请重试' };
+  }
+}
+
+/** 删除自己的评论（两段确认在行内完成）：成功后把它和整棵子树从视图剔除——结构性缩高。 */
+async function deleteComment(id: string): Promise<void> {
+  if (stale.value) return;
+  const outcome = await writes.send(deleteIntent(id));
+  if (!outcome.ok) {
+    notice.value = { tone: 'error', text: outcome.error ?? '删除失败，请重试' };
+    return;
+  }
+  removed.value = withId(removed.value, id, true);
+  if (selectedId.value === id) selectedId.value = null;
+  void reportHeight(true);
+}
+
 function submitReply(id: string, text: string): void {
   const comment = commentOf(id);
   if (comment === null) return;
@@ -937,7 +1020,8 @@ function closeReply(id: string): void {
 
 function likeStateOf(row: ThreadRow): RowLikeState {
   const isLiked = liked.value.has(row.id);
-  return { count: row.node.comment.likes + (isLiked ? 1 : 0), liked: isLiked, busy: likeBusy.value.has(row.id) };
+  const isDisliked = disliked.value.has(row.id) || (row.node.comment.disliked === true && !undisliked.value.has(row.id));
+  return { count: row.node.comment.likes + (isLiked ? 1 : 0), liked: isLiked, disliked: isDisliked, busy: likeBusy.value.has(row.id) };
 }
 
 function replyStateOf(id: string): RowReplyState {
@@ -1273,6 +1357,8 @@ onBeforeUnmount(() => {
         :key="`located-${row.id}`"
         :row="row"
         :like="likeStateOf(row)"
+        :subject-url="subject?.url"
+        :session-user-id="sessionUserId"
         :reply="row.id === replyTo ? replyStateOf(row.id) : null"
         :selected="row.id === selectedId"
         :busy="expanding.has(row.id)"
@@ -1281,6 +1367,9 @@ onBeforeUnmount(() => {
         @analyze="selectedId = $event; openGraph()"
         @user-card="onUserCard"
         @toggle-like="toggleLike"
+        @toggle-dislike="toggleDislike"
+        @copy-link="copyCommentLink"
+        @delete-comment="deleteComment"
         @open-reply="openReply"
         @close-reply="closeReply"
         @reply-input="setDraft"
@@ -1305,6 +1394,8 @@ onBeforeUnmount(() => {
         :key="row.id"
         :row="row"
         :like="likeStateOf(row)"
+        :subject-url="subject?.url"
+        :session-user-id="sessionUserId"
         :reply="row.id === replyTo ? replyStateOf(row.id) : null"
         :selected="row.id === selectedId"
         :busy="expanding.has(row.id)"
@@ -1313,6 +1404,9 @@ onBeforeUnmount(() => {
         @analyze="selectedId = $event; openGraph()"
         @user-card="onUserCard"
         @toggle-like="toggleLike"
+        @toggle-dislike="toggleDislike"
+        @copy-link="copyCommentLink"
+        @delete-comment="deleteComment"
         @open-reply="openReply"
         @close-reply="closeReply"
         @reply-input="setDraft"

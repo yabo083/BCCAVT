@@ -258,3 +258,19 @@ describe('normalizeReply：表情（content.emote）', () => {
     expect(comment.emotes!['__proto__']!.url).toBe('https://i0.hdslb.com/p.png');
   });
 });
+
+describe('normalizeReply：点踩态与正文链接', () => {
+  it('action=2 → disliked；0/1 不带 disliked', () => {
+    expect(normalizeReply(rawReply({ action: 2 })).disliked).toBe(true);
+    expect(normalizeReply(rawReply({ action: 1 })).disliked).toBeUndefined();
+    expect(normalizeReply(rawReply({ action: 0 })).disliked).toBeUndefined();
+  });
+  it('members 与 at_name_to_mid → mentions（profileUrl 与 Author.profileUrl 同形）', () => {
+    const c = normalizeReply(rawReply({ content: { message: '@阿蓝 你看', members: [{ mid: '123', uname: '阿蓝' }], at_name_to_mid: { '老白': 456 } } }));
+    expect(c.mentions).toEqual(expect.arrayContaining([{ name: '阿蓝', profileUrl: 'https://space.bilibili.com/123' }, { name: '老白', profileUrl: 'https://space.bilibili.com/456' }]));
+  });
+  it('jump_url 只收 http(s)：pc_url 优先，关键词本身是 http(s) 时才用它；其余整条丢弃', () => {
+    const c = normalizeReply(rawReply({ content: { message: '看这里', jump_url: { '看这里': { title: 't', pc_url: 'https://b23.tv/x' }, '坏链': { title: 't', pc_url: 'javascript:alert(1)' }, 'http词': {} } } }));
+    expect(c.jumps).toEqual([{ keyword: '看这里', url: 'https://b23.tv/x' }]);
+  });
+});

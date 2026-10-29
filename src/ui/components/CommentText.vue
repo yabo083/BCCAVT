@@ -9,9 +9,9 @@ import { tokenizeComment } from '../comment-text';
 import type { CommentSegment } from '../comment-text';
 import type { Comment } from '@/core/model';
 
-const props = defineProps<{ text: string; emotes?: Comment['emotes'] }>();
+const props = defineProps<{ text: string; emotes?: Comment['emotes']; mentions?: Comment['mentions']; jumps?: Comment['jumps'] }>();
 
-const segments = computed<CommentSegment[]>(() => tokenizeComment(props.text, props.emotes));
+const segments = computed<CommentSegment[]>(() => tokenizeComment(props.text, props.emotes, { mentions: props.mentions, jumps: props.jumps }));
 /** URL 级失败记录：同名表情换成有效图片后仍可正常加载。 */
 const broken = reactive(new Set<string>());
 function secureImageUrl(url: string): string {
@@ -35,6 +35,15 @@ function secureImageUrl(url: string): string {
         @error="broken.add(segment.url)"
       />
       <span v-else-if="segment.kind === 'emote'">{{ segment.token }}</span>
+      <a
+        v-else-if="segment.kind === 'link'"
+        class="cmt-link"
+        :href="segment.url"
+        target="_blank"
+        rel="noopener noreferrer"
+        @click.stop
+        >{{ segment.text }}</a
+      >
       <span v-else>{{ segment.text }}</span>
     </template>
   </span>
@@ -44,6 +53,15 @@ function secureImageUrl(url: string): string {
 .comment-text {
   /* 继承设计系统的无衬线栈，再补上各平台彩色 emoji 字体，避免系统用单色/豆腐块渲染。 */
   font-family: var(--font-sans), 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji';
+}
+
+.cmt-link {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.cmt-link:hover {
+  text-decoration: underline;
 }
 
 .emote {

@@ -74,6 +74,18 @@ export interface LikeCommentInput {
   action: 'like' | 'unlike';
 }
 
+export interface DislikeCommentInput {
+  /** 目标主体：适配器从 subject.locator 取 oid/type。 */
+  subject: Subject;
+  commentId: string;
+  action: 'dislike' | 'undislike';
+}
+
+export interface DeleteCommentInput {
+  subject: Subject;
+  commentId: string;
+}
+
 export interface ReplyCommentInput {
   /** 目标主体：同上。 */
   subject: Subject;
@@ -89,6 +101,10 @@ export interface ReplyCommentInput {
 export interface PlatformWrites {
   /** 点赞 / 取消点赞。平台返回 code 0 即 resolve。 */
   likeComment(input: LikeCommentInput, auth: WriteAuth): Promise<void>;
+  /** 点踩 / 取消点踩。平台返回 code 0 即 resolve。 */
+  dislikeComment(input: DislikeCommentInput, auth: WriteAuth): Promise<void>;
+  /** 删除评论（只对自己的评论开放）。平台返回 code 0 即 resolve。 */
+  deleteComment(input: DeleteCommentInput, auth: WriteAuth): Promise<void>;
   /** 发表评论 / 回复，成功后返回归一化的新评论。 */
   replyComment(input: ReplyCommentInput, auth: WriteAuth): Promise<Comment>;
 }

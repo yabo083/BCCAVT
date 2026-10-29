@@ -50,6 +50,8 @@ describe('适配器装配', () => {
   it('bilibiliAdapter.writes 暴露 likeComment / replyComment', () => {
     expect(typeof bilibiliAdapter.writes?.likeComment).toBe('function');
     expect(typeof bilibiliAdapter.writes?.replyComment).toBe('function');
+    expect(typeof bilibiliAdapter.writes?.dislikeComment).toBe('function');
+    expect(typeof bilibiliAdapter.writes?.deleteComment).toBe('function');
   });
 });
 
@@ -334,5 +336,31 @@ describe('csrf 红线', () => {
     await writes.replyComment({ subject: videoSubject(), text: 'x' }, { csrf: CSRF });
     expect(stub.posts[0]!.params['csrf']).toBe(CSRF);
     expect(stub.posts[0]!.url).not.toContain(CSRF);
+  });
+});
+
+describe('dislikeComment / deleteComment 参数装配', () => {
+  it('点踩：POST /x/v2/reply/hate，action=1，csrf 只在请求体里', async () => {
+    const { writes, stub } = env(ok());
+    await writes.dislikeComment({ subject: videoSubject(), commentId: ROOT_ID, action: 'dislike' }, { csrf: CSRF });
+    const post = stub.posts[0]!;
+    expect(post.url).toBe('https://api.bilibili.com/x/v2/reply/hate');
+    expect(post.params).toEqual({ oid: String(OID), type: '1', rpid: ROOT_ID, action: '1', csrf: CSRF });
+    expect(stub.urls.every((url) => !url.includes(CSRF))).toBe(true);
+  });
+  it('取消点踩：action=0；错误文本不含 csrf', async () => {
+    const { writes, stub } = env({ code: -412, message: 'rate' });
+    const error = await capture(writes.dislikeComment({ subject: videoSubject(), commentId: ROOT_ID, action: 'undislike' }, { csrf: CSRF }));
+    expect(stub.posts[0]!.params['action']).toBe('0');
+    expect(error.kind).toBe('rate-limited');
+    expect(error.message).not.toContain(CSRF);
+  });
+  it('删除：POST /x/v2/reply/del，表单只有 oid/type/rpid/csrf', async () => {
+    const { writes, stub } = env(ok());
+    await writes.deleteComment({ subject: videoSubject(), commentId: ROOT_ID }, { csrf: CSRF });
+    const post = stub.posts[0]!;
+    expect(post.url).toBe('https://api.bilibili.com/x/v2/reply/del');
+    expect(post.params).toEqual({ oid: String(OID), type: '1', rpid: ROOT_ID, csrf: CSRF });
+    expect(Object.keys(post.params)).not.toContain('action');
   });
 });

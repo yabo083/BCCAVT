@@ -25,7 +25,7 @@
 - `content/injector.ts`：`createPageActionInjector(doc): PageActionInjector`（`start/reconcile/dispose`）、`isOwnInsertion(record)`。
 - `content/targets.ts`：`commentRpid(el)`、`commentTreeSize(el): number | null`、`contextCommentIdOf(el)`、`findVideoActionsAnchor(doc)`、`collectShadowRoots(node)`、`isOwnNode(node)`，以及选择器/类名/属性常量。
 - `content/page-reader.ts`：`startPageReader(): void`（模块级单例，自带幂等与上下文失效熔断）。
-- `content/reader-reads.ts` / `reader-writes.ts`：`createReaderFetchExecutor(http)` / `executeReaderFetch`、`createReaderWriteExecutor(adapter)` / `executeReaderWrite`；入参已过桥守卫，**不抛**，失败一律变成 `ok:false`。
+- `content/reader-reads.ts` / `reader-writes.ts`：`createReaderFetchExecutor(http)` / `executeReaderFetch`、`createReaderWriteExecutor(adapter)` / `executeReaderWrite`；写意图 `ReaderWriteOp` = like/unlike/dislike/undislike/delete/reply（`page-comments.ts#isReaderWriteRequest`）；入参已过桥守卫，**不抛**，失败一律变成 `ok:false`。
 - `content/native-comments-style.ts` / `native-thread.ts` / `native-thread-layout.ts`：`startNativeCommentStyler(doc,win)`、`createNativeThreadOrganizer(doc)`、`layoutThread(...)`/`MAX_THREAD_DEPTH`（未接线，保留能力）。
 
 ## 依赖关系

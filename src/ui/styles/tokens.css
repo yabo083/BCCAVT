@@ -26,6 +26,9 @@
   --fg-subtle: #6b7773;
   --fg-on-accent: #ffffff;
 
+  /* 评论正文链接:复刻 B 站原生的链接蓝,不随配色预设变化。 */
+  --link: #008ac5;
+
   /* 交互主色:深青。刻意避开通用蓝,也避开语义色的绿/琥珀/红。 */
   --accent: #0e6d74;
   --accent-strong: #0a5259;
@@ -130,6 +133,7 @@
     --fg-subtle: #78847f;
     --fg-on-accent: #04100f;
 
+    --link: #3fa9db;
     --accent: #45c2c0;
     --accent-strong: #6fd8d4;
     --accent-bg: #10312f;
@@ -190,6 +194,7 @@
   --fg-subtle: #78847f;
   --fg-on-accent: #04100f;
 
+  --link: #3fa9db;
   --accent: #45c2c0;
   --accent-strong: #6fd8d4;
   --accent-bg: #10312f;

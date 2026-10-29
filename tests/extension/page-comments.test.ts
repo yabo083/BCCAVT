@@ -60,7 +60,7 @@ describe('写意图桥（READER_WRITE_REQUEST）的守卫', () => {
   });
 
   it('op 必须是枚举值，requestId 必须是非空且不太长的字符串', () => {
-    expect(isReaderWriteRequest({ ...writeRequestBase, op: 'delete', commentId: '123' })).toBe(false);
+    expect(isReaderWriteRequest({ ...writeRequestBase, op: 'report', commentId: '123' })).toBe(false);
     expect(isReaderWriteRequest({ ...writeRequestBase, op: undefined, commentId: '123' })).toBe(false);
     for (const requestId of ['', 1, null, undefined, 'x'.repeat(65)]) {
       expect(isReaderWriteRequest({ source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId, op: 'like', commentId: '1' })).toBe(false);

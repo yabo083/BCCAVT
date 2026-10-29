@@ -32,6 +32,8 @@ export interface WriteIntent {
 export interface RowLikeState {
   count: number;
   liked: boolean;
+  /** 点踩态（平台 action=2 或本次会话乐观踩）；与 liked 互斥，原生同款。 */
+  disliked: boolean;
   busy: boolean;
 }
 
@@ -45,6 +47,16 @@ export interface RowReplyState {
 /** 点赞 / 取消点赞：liked 是点击前的状态。 */
 export function likeIntent(commentId: string, liked: boolean): WriteIntent {
   return { op: liked ? 'unlike' : 'like', commentId };
+}
+
+/** 点踩 / 取消点踩：disliked 是点击前的状态。 */
+export function dislikeIntent(commentId: string, disliked: boolean): WriteIntent {
+  return { op: disliked ? 'undislike' : 'dislike', commentId };
+}
+
+/** 删除自己的评论：两段确认在 UI 层做，意图本身只有评论 id。 */
+export function deleteIntent(commentId: string): WriteIntent {
+  return { op: 'delete', commentId };
 }
 
 /**

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
+import PageCommentRow from '@/ui/components/PageCommentRow.vue';
 import EmbeddedComments from '@/ui/EmbeddedComments.vue';
 import {
   EMBEDDED_CONTEXT,
@@ -35,7 +36,7 @@ const ROW_HEIGHT = 100;
 /** 展开一棵大树时的回复条数：要远超一批（`ROW_PAGE_SIZE`），才能观察到「到底之后还要不要手动点」。 */
 const BIG_REPLIES = 250;
 
-const mocks = vi.hoisted(() => ({ previewRootsPage: vi.fn(), previewThread: vi.fn(), locateComment: vi.fn(), contextUrl: '' }));
+const mocks = vi.hoisted(() => ({ previewRootsPage: vi.fn(), previewThread: vi.fn(), locateComment: vi.fn(), session: vi.fn(async () => ({ platform: 'bilibili', loggedIn: true, user: { id: 'u1', name: '我' }, limitations: [] })), contextUrl: '' }));
 
 vi.mock('@/ui/services', () => ({
   ensureHeaderRules: async () => {},
@@ -49,6 +50,7 @@ vi.mock('@/ui/services', () => ({
     previewRootsPage: mocks.previewRootsPage,
     previewThread: mocks.previewThread,
     locateComment: mocks.locateComment,
+    session: mocks.session,
   },
 }));
 
@@ -1034,5 +1036,30 @@ describe('顶层排序切换（最热 | 最新）', () => {
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) expect(call[2]).toMatchObject({ order: 'time' });
     expect(calls[0]![1]).toBeNull();
+  });
+});
+describe('默认排序与删除', () => {
+  it('存储默认序 time → 首屏按 time 取数；缺省仍是 hot', async () => {
+    planPages([{ cursor: null, comments: [ROOT], next: null }]);
+    const getSpy = vi.spyOn(chrome.storage.local, 'get').mockImplementation(async () => ({ 'loupe.reader.defaultOrder': 'time' }));
+    const w1 = await open();
+    expect(mocks.previewRootsPage.mock.calls.at(-1)![2]).toMatchObject({ order: 'time' });
+    w1.unmount();
+    getSpy.mockRestore();
+    plan = new Map(); planPages([{ cursor: null, comments: [ROOT], next: null }]);
+    await open();
+    expect(mocks.previewRootsPage.mock.calls.at(-1)![2]).toMatchObject({ order: 'hot' });
+  });
+  it('删除成功：该评论连同子树从视图剔除', async () => {
+    planPages([{ cursor: null, comments: [ROOT, REPLY, SECOND], next: null }]);
+    const wrapper = await open();
+    expect(wrapper.findAll('[data-comment-id]')).toHaveLength(3);
+    const row = wrapper.findAllComponents(PageCommentRow).find((r) => r.props('row').id === '1');
+    row!.vm.$emit('delete-comment', '1');
+    await settle();
+    const writes = post.mock.calls.map((c) => c[0]).filter((m) => m?.type === 'loupe:reader-write');
+    window.dispatchEvent(new MessageEvent('message', { data: { source: READER_BRIDGE_SOURCE, type: 'loupe:reader-write-result', requestId: writes.at(-1).requestId, ok: true }, origin: 'https://www.bilibili.com', source: window }));
+    await settle();
+    expect(wrapper.findAll('[data-comment-id]').map((e) => e.attributes('data-comment-id'))).toEqual(['2']);
   });
 });
