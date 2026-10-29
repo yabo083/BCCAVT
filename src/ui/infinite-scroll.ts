@@ -168,11 +168,13 @@ export class CursorPager<T extends { id: string }> {
       const before = this.items.length;
       this.commit(page.items);
       const added = this.items.length - before;
-      // 游标环：平台又给了同一个 next —— 再取下去是同一页的无限重放。
-      if (page.next !== null && this.seenCursors.has(page.next)) {
+      // 真环判终：同一个 next 重复出现、且这一页一条新条目都没添——位置原地踏步，再取下去是
+      // 同一页的无限重放。注意「next 重复但仍在出新条目」是平台的合法会话内翻页（原生最热
+      // 连续数页用同一 offset 翻页），绝不当环。
+      if (page.next !== null && this.seenCursors.has(page.next) && added === 0) {
         this.cursor = page.next;
         this.hasNext = false;
-        this.endReason = this.cycleEndReason ?? '平台返回了重复的翻页游标，分页到此为止';
+        this.endReason = this.cycleEndReason ?? '平台重复返回了同一翻页位置，已停止继续加载';
       } else {
         this.cursor = page.next;
         if (page.next !== null) this.seenCursors.add(page.next);

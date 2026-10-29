@@ -2,7 +2,7 @@ import { PlatformError } from './errors';
 import { cacheKey, FRESHNESS_TTL_MS } from './cache/types';
 import type { Cache, Freshness, LoadOptions } from './cache/types';
 import { subjectKey } from './model';
-import type { Comment, Cursor, Page, Session, Subject, SubjectRef, ThreadPage } from './model';
+import type { Comment, Cursor, Page, RootOrder, Session, Subject, SubjectRef, ThreadPage } from './model';
 import type { FetchContext, HttpClient, PlatformAdapter, Politeness } from './platform';
 import type { CrawlOptions, CrawlPhase, CrawlProgress, FetchStats, RootsPage, Snapshot } from './report';
 import { rootOrderOf } from './report';
@@ -287,6 +287,21 @@ export class CrawlRunner {
   }
 }
 
+/**
+ * 取一页顶层评论。按时间序的游标是纯位置，可按游标缓存；热度序不行——登录态下平台会把
+ * **同一个 offset 连续返回多次**、在服务端会话里推进（实测原生请求同一 offset 4 次，回 19→20→6→0 条后 is_end）。
+ * 按游标缓存会让重复的 offset 一直命中第一份结果、永远推进不了，所以热度序每页都回源、不读不写页缓存。
+ */
+function loadRootsPage(
+  runner: CrawlRunner,
+  key: string,
+  order: RootOrder,
+  loader: (ctx: FetchContext) => Promise<Page<Comment>>,
+  options: LoadOptions,
+): Promise<Page<Comment>> {
+  return order === 'hot' ? runner.request(loader) : runner.load(key, 'page', loader, options);
+}
+
 export interface SubjectCrawl {
   subject: Subject;
   /** 已按 maxRoots 截断、且只含保留根评论及其回复。 */
@@ -344,12 +359,14 @@ export async function crawlSubject(
   const seenCursors = new Set<Cursor>();
   for (;;) {
     throwIfAborted(runner.signal);
-    const page: Page<Comment> = await runner.load<Page<Comment>>(
+    const page: Page<Comment> = await loadRootsPage(
+      runner,
       cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
-      'page',
+      order,
       (ctx) => adapter.listRoots(subject, cursor, order, ctx),
       pageOptions,
     );
+    const rootsBefore = roots.length;
     for (const item of page.items) {
       listed.push(item);
       if (item.rootId === null && !rootIds.has(item.id)) {
@@ -359,8 +376,10 @@ export async function crawlSubject(
     }
     runner.setPhase('roots', { fetched: roots.length, declared: subject.declaredCommentCount });
     cursor = page.next;
-    if (cursor !== null && seenCursors.has(cursor)) {
-      reasons.push('平台返回了重复的翻页游标，顶层分页被中止');
+    // 真环判终：next 重复且这一页零新增——位置原地踏步才是死循环；重复 next 仍在出新根
+    // 是平台的合法会话内翻页（原生最热连续数页同 offset 翻页），照走。
+    if (cursor !== null && seenCursors.has(cursor) && roots.length === rootsBefore) {
+      reasons.push('平台重复返回了同一翻页位置，已停止继续加载');
       break;
     }
     if (cursor === null) break;
@@ -492,11 +511,12 @@ export async function crawlRootsPage(
   const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
   const order = rootOrderOf(options);
   const usePageCache = options.refresh === 'cache-first';
-  const page = await runner.load<Page<Comment>>(
+  const page = await loadRootsPage(
+    runner,
     cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
-    'page',
+    order,
     (ctx) => adapter.listRoots(subject, cursor, order, ctx),
-    { force: !usePageCache },
+    usePageCache ? {} : { force: true },
   );
 
   const roots: Comment[] = [];

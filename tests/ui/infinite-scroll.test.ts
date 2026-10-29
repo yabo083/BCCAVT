@@ -169,17 +169,20 @@ describe('CursorPager', () => {
     pager.reset();
     expect(listener.mock.calls.length).toBe(before);
   });
-  it('游标成环即到底：同一 next 再来一次时 hasNext=false 并给出 reason', async () => {
+  it('游标环 + 零新增才算到底：同一 next 仍在出新条目时继续（原生会话内翻页）', async () => {
     const { fetchPage } = pagedFetch([
       { items: [{ id: 'a' }], next: 'loop' },
-      { items: [{ id: 'b' }], next: 'loop' },
+      { items: [{ id: 'b' }], next: 'loop' },   // next 重复但有新增 —— 合法，继续
+      { items: [{ id: 'a' }], next: 'loop' },   // next 重复且零新增 —— 真环，判终
     ]);
-    const pager = new CursorPager<Item>({ fetchPage, cycleEndReason: '热度排序的翻页到此为止' });
+    const pager = new CursorPager<Item>({ fetchPage, cycleEndReason: '平台重复返回了同一翻页位置，已停止继续加载' });
 
     await pager.next();
     await pager.next();
+    expect(pager.state().hasNext).toBe(true); // 重复 next + 新增 ≠ 环
+    await pager.next();
 
-    expect(pager.state()).toMatchObject({ hasNext: false, loading: false, endReason: '热度排序的翻页到此为止' });
+    expect(pager.state()).toMatchObject({ hasNext: false, loading: false, endReason: '平台重复返回了同一翻页位置，已停止继续加载' });
     expect(pager.state().items.map((i) => i.id)).toEqual(['a', 'b']);
   });
 

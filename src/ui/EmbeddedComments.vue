@@ -197,7 +197,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
  */
 const pager = new CursorPager<Comment>({
   fetchPage,
-  cycleEndReason: '热度排序的翻页到此为止，切换「最新」可看到全部评论',
+  cycleEndReason: '平台重复返回了同一翻页位置，已停止继续加载',
   // 用户点「取消」或阅读器卸载造成的中断不是失败：状态机据此不记账，界面也不会弹错误
   isCanceled: (error) => error instanceof Error && error.name === CANCELED_ERROR_NAME,
 });

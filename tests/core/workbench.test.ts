@@ -716,16 +716,17 @@ describe('可恢复抓取', () => {
       [makeComment({ id: 'r1', replyCount: 0 })],
       [makeComment({ id: 'r2', replyCount: 0 })],
     ];
-    // 第二页的 next 指回自己：复用缓存时这种畸形游标会让 for(;;) 永不终止
+    // 第 2 页 next 重复但仍有新增（合法会话翻页），第 3 页 next 重复且零新增 = 真环判终
     adapter.rootsProvider = (cursor) => {
       if (cursor === null) return { items: pages[0]!, next: 'loop' };
+      if (cursor === 'loop') return { items: pages[1]!, next: 'loop' };
       return { items: pages[1]!, next: 'loop' };
     };
     const { workbench } = build(adapter);
     const result = await workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
     expect(result.snapshot.completeness.truncated).toBe(true);
     const r = result.snapshot.completeness.reasons.join(' ');
-    expect(r).toContain('游标');
+    expect(r).toContain('同一翻页位置');
     expect(r).not.toContain('上限');
     expect(result.snapshot.comments.map((c) => c.id).sort()).toEqual(['r1', 'r2']);
   });

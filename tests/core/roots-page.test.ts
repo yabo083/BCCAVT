@@ -159,6 +159,24 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     expect(adapter.calls.roots).toBe(2);
   });
 
+  it('hot 序不按游标缓存：平台重复给同一个 offset 时每次都回源、拿到新的一页', async () => {
+    const adapter = new FakeAdapter();
+    let call = 0;
+    // 登录态热度序：同一个 offset 连续返回，平台在服务端会话里推进
+    adapter.rootsProvider = async () => {
+      call += 1;
+      return { items: [makeComment({ id: `h${call}` })], next: 'same-offset' };
+    };
+    const workbench = build(adapter);
+
+    const first = await workbench.previewRootsPage(adapter.subject.ref, 'same-offset', options({ order: 'hot' }), noop, signal());
+    const second = await workbench.previewRootsPage(adapter.subject.ref, 'same-offset', options({ order: 'hot' }), noop, signal());
+
+    expect(adapter.calls.roots).toBe(2);
+    expect(first.roots.map((c) => c.id)).toEqual(['h1']);
+    expect(second.roots.map((c) => c.id)).toEqual(['h2']);
+  });
+
   it('未知的排序值在公开入口被拒绝', async () => {
     const adapter = new FakeAdapter();
     const workbench = build(adapter);
