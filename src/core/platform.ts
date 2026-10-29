@@ -52,10 +52,12 @@ export interface HeaderRewrite {
 }
 
 export interface Politeness {
-  /** 同一平台的最大并发请求数。 */
+  /** 同一平台的最大并发请求数（按文档）。 */
   concurrency: number;
-  /** 相邻两次请求开始的最小间隔。 */
+  /** 相邻两次请求开始的最小间隔（保留字段，速率已由共享令牌桶接管）。 */
   minIntervalMs: number;
+  /** 跨文档共享令牌桶参数；缺省 = 该平台不做令牌桶限速。 */
+  rate?: { ratePerSec: number; burst: number; reserve: number };
 }
 
 /**

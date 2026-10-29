@@ -157,7 +157,7 @@ export const bilibiliAdapter: PlatformAdapter = {
       set: { Origin: 'https://www.bilibili.com', Referer: 'https://www.bilibili.com/' },
     },
   ],
-  politeness: { concurrency: 3, minIntervalMs: 250 },
+  politeness: { concurrency: 2, minIntervalMs: 0, rate: { ratePerSec: 1, burst: 3, reserve: 1 } },
   parseTarget,
   getSession: fetchSession,
   getSubject,

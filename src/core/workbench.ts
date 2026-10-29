@@ -104,12 +104,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function queueFor(adapter: PlatformAdapter): PoliteQueue {
     const existing = queues.get(adapter.id);
     if (existing !== undefined) return existing;
-    const created = new PoliteQueue(adapter.politeness, sleep, now);
+    const created = new PoliteQueue(adapter.politeness);
     queues.set(adapter.id, created);
     return created;
   }
 
-  function makeRunner(adapter: PlatformAdapter, signal: AbortSignal, onProgress: (progress: CrawlProgress) => void): CrawlRunner {
+  function makeRunner(adapter: PlatformAdapter, signal: AbortSignal, onProgress: (progress: CrawlProgress) => void, priority: 'interactive' | 'bulk' = 'interactive'): CrawlRunner {
     return new CrawlRunner({
       adapter,
       cache,
@@ -120,6 +120,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       onProgress,
       queue: queueFor(adapter),
       stats: { requests: 0, cacheHits: 0, retries: 0, durationMs: 0 },
+      priority,
     });
   }
 
@@ -193,7 +194,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     validateCrawlOptions(options);
     const adapter = adapterFor(ref.platform);
     const target: Target = { kind: 'subject', subject: ref };
-    const runner = makeRunner(adapter, signal, onProgress);
+    const runner = makeRunner(adapter, signal, onProgress, 'bulk');
 
     if (options.refresh === 'cache-first') {
       const existing = await readLatest(target);
@@ -246,7 +247,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     validateCrawlOptions(options);
     const adapter = adapterFor(ref.platform);
     const target: Target = { kind: 'thread', subject: ref, commentId };
-    const runner = makeRunner(adapter, signal, onProgress);
+    const runner = makeRunner(adapter, signal, onProgress, 'bulk');
 
     if (options.refresh === 'cache-first') {
       const existing = await readLatest(target);

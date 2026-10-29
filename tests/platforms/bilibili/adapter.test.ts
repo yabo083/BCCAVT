@@ -70,7 +70,7 @@ describe('适配器元数据', () => {
         set: { Origin: 'https://www.bilibili.com', Referer: 'https://www.bilibili.com/' },
       },
     ]);
-    expect(bilibiliAdapter.politeness).toEqual({ concurrency: 3, minIntervalMs: 250 });
+    expect(bilibiliAdapter.politeness).toEqual({ concurrency: 2, minIntervalMs: 0, rate: { ratePerSec: 1, burst: 3, reserve: 1 } });
   });
 
   it('parseTarget 委托给 URL 解析', () => {

@@ -16,7 +16,7 @@ function recordingSleep(waits: number[]): SleepFn {
 
 describe('PoliteQueue', () => {
   it('并发不超过 politeness.concurrency', async () => {
-    const queue = new PoliteQueue({ concurrency: 2, minIntervalMs: 0 }, async () => {}, () => 0);
+    const queue = new PoliteQueue({ concurrency: 2, minIntervalMs: 0 });
     let running = 0;
     let peak = 0;
     const gates: Array<() => void> = [];
@@ -42,33 +42,23 @@ describe('PoliteQueue', () => {
     expect(peak).toBe(2);
   });
 
-  it('相邻请求预留最小间隔时隙，不依赖真实时间', async () => {
-    const waits: number[] = [];
-    const reported: number[] = [];
-    let clock = 1_000;
-    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 100 }, recordingSleep(waits), () => clock);
-
-    await queue.run(async () => {}, signal); // 首次直接放行
-    await queue.run(async () => {}, signal, (ms) => reported.push(ms)); // 间隔未到 → 等待
-    clock += 1_000; // 时间前进后不再等待
-    await queue.run(async () => {}, signal, (ms) => reported.push(ms));
-
-    expect(waits).toEqual([100]);
-    expect(reported).toEqual([100]);
+  it('minInterval 已由共享令牌桶接管，队列本身不再制造等待', async () => {
+    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 100 });
+    const order: number[] = [];
+    await Promise.all([1, 2, 3].map(async (n) => queue.run(async () => order.push(n), signal)));
+    // 不设间隔：三个请求背靠背完成，没有 sleep 参与
+    expect(order).toEqual([1, 2, 3]);
   });
 
   it('已取消的信号不再放行', async () => {
     const controller = new AbortController();
     controller.abort();
-    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 0 }, async () => {}, () => 0);
+    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 0 });
     await expect(queue.run(async () => 'never', controller.signal)).rejects.toMatchObject({ kind: 'aborted' });
   });
 
-  it('最小间隔等待期间不超发并发（名额先占后用）', async () => {
-    const waits: number[] = [];
-    const queue = new PoliteQueue({ concurrency: 2, minIntervalMs: 100 }, async (ms) => {
-      waits.push(ms);
-    }, () => 0);
+  it('等待名额期间不超发并发（名额先占后用）', async () => {
+    const queue = new PoliteQueue({ concurrency: 2, minIntervalMs: 100 });
     let running = 0;
     let peak = 0;
     const gates: Array<() => void> = [];
@@ -84,7 +74,6 @@ describe('PoliteQueue', () => {
     // 旧实现会在 sleep 期间保持 active 不变，四个请求全部越过闸门 → peak 4。
     expect(peak).toBe(2);
     expect(gates).toHaveLength(2);
-    expect(waits).toEqual([100]);
 
     gates.splice(0).forEach((release) => release());
     await flush();
@@ -97,7 +86,7 @@ describe('PoliteQueue', () => {
   });
 
   it('排队等待时被取消会立即摘除并以 aborted 拒绝', async () => {
-    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 0 }, async () => {}, () => 0);
+    const queue = new PoliteQueue({ concurrency: 1, minIntervalMs: 0 });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;

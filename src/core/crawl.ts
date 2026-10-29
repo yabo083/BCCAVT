@@ -1,11 +1,13 @@
 import { PlatformError } from './errors';
-import { cacheKey } from './cache/types';
+import { cacheKey, FRESHNESS_TTL_MS } from './cache/types';
 import type { Cache, Freshness, LoadOptions } from './cache/types';
 import { subjectKey } from './model';
 import type { Comment, Cursor, Page, Session, Subject, SubjectRef, ThreadPage } from './model';
 import type { FetchContext, HttpClient, PlatformAdapter, Politeness } from './platform';
 import type { CrawlOptions, CrawlPhase, CrawlProgress, FetchStats, RootsPage, Snapshot } from './report';
 import { rootOrderOf } from './report';
+import { sharedLimiterFor } from './rate-limit';
+import type { RequestPriority, SharedLimiter } from './rate-limit';
 
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
 
@@ -43,17 +45,12 @@ export const defaultSleep: SleepFn = (ms, signal) =>
  */
 export class PoliteQueue {
   private active = 0;
-  private nextSlot = 0;
   private readonly waiters: Array<{ resolve: () => void }> = [];
 
-  constructor(
-    private readonly politeness: Politeness,
-    private readonly sleep: SleepFn,
-    private readonly now: () => number,
-  ) {}
+  constructor(private readonly politeness: Politeness) {}
 
-  async run<T>(fn: () => Promise<T>, signal: AbortSignal, onWait?: (ms: number) => void): Promise<T> {
-    await this.acquire(signal, onWait);
+  async run<T>(fn: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    await this.acquire(signal);
     try {
       return await fn();
     } finally {
@@ -68,21 +65,12 @@ export class PoliteQueue {
     else next.resolve();
   }
 
-  private async acquire(signal: AbortSignal, onWait?: (ms: number) => void): Promise<void> {
+  private async acquire(signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     await this.waitForTurn(signal);
     try {
       // 名额已到手；若此时被取消，必须把名额让出去而不是丢弃。
       throwIfAborted(signal);
-      const at = this.now();
-      const waitMs = this.nextSlot - at;
-      if (waitMs > 0) {
-        this.nextSlot += this.politeness.minIntervalMs;
-        onWait?.(waitMs);
-        await this.sleep(waitMs, signal);
-      } else {
-        this.nextSlot = at + this.politeness.minIntervalMs;
-      }
     } catch (error) {
       this.release();
       throw error;
@@ -168,6 +156,10 @@ export interface CrawlRunnerDeps {
   /** 平台级共享队列；缺省时本 runner 自建一个。 */
   queue?: PoliteQueue;
   retry?: RetryOptions;
+  /** 跨文档共享令牌桶；缺省按 adapter.politeness.rate 取平台注册表实例。 */
+  limiter?: SharedLimiter | null;
+  /** 本次取数的优先级：analyze* 批量走 'bulk'，预览/定位/会话走 'interactive'。 */
+  priority?: RequestPriority;
 }
 
 /**
@@ -182,9 +174,11 @@ export class CrawlRunner {
   private threadsDone: number | undefined;
   private threadsTotal: number | undefined;
   private waitingMs: number | undefined;
+  private readonly limiter: SharedLimiter | undefined;
 
   constructor(readonly deps: CrawlRunnerDeps) {
-    this.queue = deps.queue ?? new PoliteQueue(deps.adapter.politeness, deps.sleep, deps.now);
+    this.queue = deps.queue ?? new PoliteQueue(deps.adapter.politeness);
+    this.limiter = deps.limiter === null ? undefined : (deps.limiter ?? sharedLimiterFor(deps.adapter.id, deps.adapter.politeness.rate));
   }
 
   get adapter(): PlatformAdapter {
@@ -239,14 +233,29 @@ export class CrawlRunner {
       return await this.queue.run(
         () =>
           withRetry(
-            () => {
+            async () => {
+              if (this.limiter !== undefined) {
+                await this.limiter.acquire(this.deps.priority ?? 'interactive', this.deps.signal, (waitMs) => {
+                  this.waitingMs = waitMs;
+                  this.report();
+                });
+              }
               stats.requests++;
-              return fn({
-                http: this.deps.http,
-                cache: this.deps.cache,
-                signal: this.deps.signal,
-                identity: this.deps.http.identity ?? 'direct',
-              });
+              try {
+                const result = await fn({
+                  http: this.deps.http,
+                  cache: this.deps.cache,
+                  signal: this.deps.signal,
+                  identity: this.deps.http.identity ?? 'direct',
+                });
+                void this.limiter?.noteSuccess();
+                return result;
+              } catch (error) {
+                if (error instanceof PlatformError && error.kind === 'rate-limited') {
+                  await this.limiter?.noteRateLimited(error.retryAfterMs);
+                }
+                throw error;
+              }
             },
             {
               signal: this.deps.signal,
@@ -260,10 +269,6 @@ export class CrawlRunner {
             this.deps.retry,
           ),
         this.deps.signal,
-        (waitMs) => {
-          this.waitingMs = waitMs;
-          this.report();
-        },
       );
     } finally {
       if (this.waitingMs !== undefined) {
@@ -315,6 +320,19 @@ export async function crawlSubject(
   // 页面缓存必须按账号隔离：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户。
   const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
   const order = rootOrderOf(options);
+  // 可恢复抓取：全量/增量起跑即写「crawl-run」检查点（本轮起跑时刻），成功才删除。
+  // 上一轮的检查点若仍在页 TTL 内，本轮 freshAfter 复用它的起跑时刻——中断轮已抓的页
+  // 直接命中，更老的页按未命中重取；没有可用检查点时退化为普通 force 回源。
+  let freshAfter: number | undefined;
+  const runKey = cacheKey('pointer', 'crawl-run', subjectKey(ref), account, order);
+  if (!usePageCache) {
+    const prior = await runner.cache.get<{ startedAt: number }>(runKey);
+    freshAfter = prior !== undefined && prior.storedAt >= runner.deps.now() - FRESHNESS_TTL_MS.page! ? prior.value.startedAt : undefined;
+    // 续跑沿用上一轮的起跑时刻：再次中断时，前几轮抓到的页仍算本轮的
+    await runner.cache.set(runKey, { startedAt: freshAfter ?? runner.deps.now() }, 'pointer');
+  }
+  // 没有可复用的检查点 = 普通全量/增量：仍按 force 回源（freshAfter 只服务续跑语义）。
+  const pageOptions: LoadOptions = usePageCache ? {} : freshAfter !== undefined ? { freshAfter } : { force: true };
   const roots: Comment[] = [];
   const rootIds = new Set<string>();
   const listed: Comment[] = [];
@@ -326,7 +344,7 @@ export async function crawlSubject(
       cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
       'page',
       (ctx) => adapter.listRoots(subject, cursor, order, ctx),
-      { force: !usePageCache },
+      pageOptions,
     );
     for (const item of page.items) {
       listed.push(item);
@@ -396,23 +414,27 @@ export async function crawlSubject(
   const concurrency = Math.max(1, adapter.politeness.concurrency);
   let threadsDone = 0;
   let threadsTruncated = false;
-  for (let i = 0; i < pending.length; i += concurrency) {
-    throwIfAborted(runner.signal);
-    await Promise.all(
-      pending.slice(i, i + concurrency).map(async (root) => {
-        const result = await crawlThreadPages(runner, subject, root.id, options.maxRepliesPerThread, usePageCache, account);
-        for (const comment of result.comments) comments.set(comment.id, comment);
-        if (result.truncated) threadsTruncated = true;
-        threadsDone++;
-        runner.setPhase('threads', {
-          fetched: comments.size,
-          declared: subject.declaredCommentCount,
-          threadsDone,
-          threadsTotal: pending.length,
-        });
-      }),
-    );
-  }
+  // 有界 worker 池取代按批切片：某个 worker 卡在慢请求上时其余照常推进，没有队头阻塞。
+  let nextThread = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      throwIfAborted(runner.signal);
+      const index = nextThread++;
+      if (index >= pending.length) return;
+      const root = pending[index]!;
+      const result = await crawlThreadPages(runner, subject, root.id, options.maxRepliesPerThread, usePageCache, account, freshAfter);
+      for (const comment of result.comments) comments.set(comment.id, comment);
+      if (result.truncated) threadsTruncated = true;
+      threadsDone++;
+      runner.setPhase('threads', {
+        fetched: comments.size,
+        declared: subject.declaredCommentCount,
+        threadsDone,
+        threadsTotal: pending.length,
+      });
+    }
+  });
+  await Promise.all(workers);
 
   const kept = new Set(roots.map((root) => root.id));
   const keptComments: Comment[] = [];
@@ -433,6 +455,7 @@ export async function crawlSubject(
     reasons.push(`平台声明 ${declared} 条评论，实际抓取 ${keptComments.length} 条`);
   }
 
+  if (!usePageCache) await runner.cache.delete(runKey); // 成功才删检查点：失败/中断留给下轮续跑
   return { subject, comments: keptComments, roots, declared, truncated: reasons.length > 0, reasons };
 }
 
@@ -503,22 +526,25 @@ export async function crawlRootsPage(
   });
   const concurrency = Math.max(1, adapter.politeness.concurrency);
   let threadsDone = 0;
-  for (let i = 0; i < pending.length; i += concurrency) {
-    throwIfAborted(runner.signal);
-    await Promise.all(
-      pending.slice(i, i + concurrency).map(async (root) => {
-        const result = await crawlThreadPages(runner, subject, root.id, options.maxRepliesPerThread, usePageCache, account);
-        for (const comment of result.comments) comments.set(comment.id, comment);
-        threadsDone++;
-        runner.setPhase('threads', {
-          fetched: comments.size,
-          declared: subject.declaredCommentCount,
-          threadsDone,
-          threadsTotal: pending.length,
-        });
-      }),
-    );
-  }
+  let nextThread = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      throwIfAborted(runner.signal);
+      const index = nextThread++;
+      if (index >= pending.length) return;
+      const root = pending[index]!;
+      const result = await crawlThreadPages(runner, subject, root.id, options.maxRepliesPerThread, usePageCache, account);
+      for (const comment of result.comments) comments.set(comment.id, comment);
+      threadsDone++;
+      runner.setPhase('threads', {
+        fetched: comments.size,
+        declared: subject.declaredCommentCount,
+        threadsDone,
+        threadsTotal: pending.length,
+      });
+    }
+  });
+  await Promise.all(workers);
 
   return {
     subject,
@@ -547,6 +573,7 @@ export async function crawlThreadPages(
   maxReplies: number,
   usePageCache: boolean,
   account: string,
+  freshAfter?: number,
 ): Promise<ThreadCrawl> {
   const comments: Comment[] = [];
   let root: Comment | undefined;
@@ -558,7 +585,7 @@ export async function crawlThreadPages(
       cacheKey('page', subjectKey(subject.ref), account, 'thread', commentId, cursor ?? 'start'),
       'page',
       (ctx) => runner.adapter.listThread(subject, commentId, cursor, ctx),
-      { force: !usePageCache },
+      usePageCache ? {} : freshAfter !== undefined ? { freshAfter } : { force: true },
     );
     if (cursor === null && page.root !== undefined) root = page.root;
     for (const comment of page.items) comments.push(comment);

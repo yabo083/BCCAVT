@@ -51,6 +51,8 @@ export interface LoadResult<T> {
 export interface LoadOptions {
   /** 忽略已有条目，强制回源并回写。 */
   force?: boolean;
+  /** 只认 storedAt >= 此值的条目（可恢复抓取：中断轮已抓的页算命中，更老的页重取）。 */
+  freshAfter?: number;
 }
 
 export interface CacheLayerStats {

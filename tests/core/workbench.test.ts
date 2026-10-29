@@ -5,7 +5,7 @@ import type { Cache } from '@/core/cache/types';
 import type { SleepFn } from '@/core/crawl';
 import { PlatformError } from '@/core/errors';
 import { createHttpClient } from '@/core/http';
-import type { Comment } from '@/core/model';
+import type { Comment, Cursor } from '@/core/model';
 import { DEFAULT_CRAWL_OPTIONS, type CrawlOptions, type CrawlProgress } from '@/core/report';
 import { createWorkbench } from '@/core/workbench';
 import type { Workbench } from '@/core/report';
@@ -654,3 +654,52 @@ describe('平台级限流', () => {
     expect(adapter.maxInFlight).toBe(1);
   });
 });
+
+describe('可恢复抓取', () => {
+  it('中断的轮次留检查点：重跑复用已抓页，只补缺页', async () => {
+    const adapter = new FakeAdapter();
+    const pages = [
+      [makeComment({ id: 'r1', replyCount: 0 }), makeComment({ id: 'r2', replyCount: 0 })],
+      [makeComment({ id: 'r3', replyCount: 0 })],
+      [makeComment({ id: 'r4', replyCount: 0 })],
+    ];
+    // 第一轮在第二页失败 → 检查点留下
+    adapter.rootsProvider = ((cursor: Cursor | null) =>
+      cursor === '1' ? Promise.reject(new PlatformError('unavailable', '中断')) : pagedRoots(pages)(cursor)) as typeof adapter.rootsProvider;
+    const { workbench } = build(adapter);
+    await expect(workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal)).rejects.toThrow();
+    // 第二轮修复后重跑
+    adapter.rootsProvider = pagedRoots(pages);
+    const callsBefore = adapter.rootCursors.length;
+    const result = await workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
+    const rerunCalls = adapter.rootCursors.slice(callsBefore);
+    // start 页命中中断轮的页缓存，只回源 '1' 与 '2'
+    expect(rerunCalls).toEqual(['1', '2']);
+    expect(result.snapshot.comments.map((c) => c.id).sort()).toEqual(['r1', 'r2', 'r3', 'r4']);
+    // 成功后检查点被删除：再跑一轮 = 普通全量回源
+    const calls2 = adapter.rootCursors.length;
+    await workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
+    expect(adapter.rootCursors.slice(calls2)).toEqual([null, '1', '2']);
+  });
+});
+
+  it('评论树抓取用有界 worker 池：并发上限 = politeness.concurrency，无队头阻塞', async () => {
+    const adapter = new FakeAdapter();
+    const roots = [1, 2, 3, 4].map((i) => makeComment({ id: 'r' + i, replyCount: 1, createdAt: 5 - i }));
+    adapter.rootsProvider = pagedRoots([roots]);
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    adapter.threadProvider = ((commentId: string) =>
+      (commentId === 'r1' ? gate.then(() => ({ items: [makeComment({ id: commentId + '-c1', rootId: commentId, parentId: commentId })], next: null })) : ({ items: [makeComment({ id: commentId + '-c1', rootId: commentId, parentId: commentId })], next: null }))) as typeof adapter.threadProvider;
+    const { workbench } = build(adapter);
+    const pending = workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
+    // IDB 交易走宏任务：轮询要等事件循环而不是只排微任务
+    for (let i = 0; i < 200 && adapter.threadCalls.length < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    // r1 卡住时其余 worker 照常推进 r2/r3/r4
+    expect(adapter.threadCalls.length).toBe(4);
+    expect(adapter.maxInFlight).toBe(2);
+    releaseFirst();
+    await pending;
+  });

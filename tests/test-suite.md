@@ -61,7 +61,8 @@
 | CORE-03 | DNR 请求头改写真的生效 | 已装扩展 | 打开 Network 面板看扩展自身发出的 api 请求 | 带扩展形态的 `Origin`/`Referer`；缺规则时平台返回 `-403` 类错误 | `src/extension/background.ts`（`initiatorDomains: [chrome.runtime.id]`） |
 | CORE-04 | 缓存跨会话生效 | 已抓过一次同一视频 | 关闭再打开该视频页 | 首屏不再重复请求已有分页（命中缓存）；登录态变化时**不得**复用匿名的页缓存 | `src/core/crawl.ts`（页缓存键 + 账号隔离） |
 | CORE-05 | 工作台与阅读器共用一份存储（身份分键） | 登录态；同一视频先在放大镜窗口跑过完整分析 | 打开该视频页的阅读器滚前两页 | 已抓过的页不再回源（IDB 里同一组 `u:<mid>` 页键被两边共用）；`session` 与 `nav` 键按身份姿态分开（`*|page` / `*|direct`）互不覆盖 | `src/ui/services.ts#readerWorkbench`、`workbench.ts#loadSession`、`api.ts#loadNavData` |
-| CORE-06 | 跨文档同键单飞（Web Locks） | 同一视频同时开着阅读器与工作台 | 两边几乎同时触发同一页取数 | 平台只收到一次该页请求；另一边按磁盘命中返回 | `src/core/cache/index.ts#getOrLoad`（`locks.request`）、ADR-0009 |
+| CORE-06 | 跨文档同键单飞（Web Locks） | 同一视频同时开着阅读器与工作台 | 两边几乎同时触发同一页取数 | 平台只收到一次该页请求；另一边按磁盘命中返回 | `src/core/cache/index.ts#getOrLoad`（`locks.request`）、ADR-0009 |
+| CORE-08 | 共享令牌桶限速 | 工作台全量分析进行中 | ① 同时开阅读器翻页 → 总请求率 ≤ burst + rate·t；② bulk 只在水位 ≥1+reserve 时取令牌，interactive 总能拿到；③ 注入一次 rate-limited → 全文档共享 30s 冷却，重试不早于冷却结束；④ 中断全量后 10min 内重跑 → 已抓页命中，只补缺页 | src/core/rate-limit.ts、crawl.ts worker 池与 crawl-run 检查点、ADR-0010 |
 | CORE-07 | 定位未读评论端到端 | 工作台选中一条不在已读范围内的评论 | 点「在评论区定位」 | 评论流上方出现定位块（标题「定位到的评论」+ 根评论块）；目标行居中闪烁；主流行序不变；点 × 关闭块并允许缩高 | `workbench.ts#runLocate`、`src/platforms/bilibili/index.ts#seekRoot`、`EmbeddedComments.vue#locateComment`、ADR-0009 |
 
 ## 5. 写操作的真实后果（WRITE）

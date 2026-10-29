@@ -134,7 +134,7 @@ export function createCache(options: CreateCacheOptions = {}): Cache {
       }
       if (loadOptions?.force !== true) {
         const hit = await read<T>(key);
-        if (hit !== undefined) {
+        if (hit !== undefined && (loadOptions?.freshAfter === undefined || hit.entry.storedAt >= loadOptions.freshAfter)) {
           return { value: hit.entry.value, source: hit.source, storedAt: hit.entry.storedAt };
         }
         const raced = inflight.get(key);
@@ -159,7 +159,7 @@ export function createCache(options: CreateCacheOptions = {}): Cache {
           return await locks.request(`loupe-cache|${key}`, async () => {
             if (loadOptions?.force !== true) {
               const hit = await read<T>(key);
-              if (hit !== undefined) {
+              if (hit !== undefined && (loadOptions?.freshAfter === undefined || hit.entry.storedAt >= loadOptions.freshAfter)) {
                 return { value: hit.entry.value, source: hit.source, storedAt: hit.entry.storedAt };
               }
             }
