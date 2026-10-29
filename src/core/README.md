@@ -19,12 +19,13 @@
 | 成员 | 要点 | 结果 |
 |---|---|---|
 | `resolve(input)` | 依次试各适配器 `parseTarget`，都不认返回 `null`（`workbench.ts:347`） | `{adapter,target} \| null` |
-| `session(platform, signal?)` | **每次 force 回源**，不吃 30 分钟 session 缓存（`workbench.ts:355-359`） | `Session` |
+| `session(platform, signal?)` | **每次 force 回源**，不吃 30 分钟 session 缓存（`workbench.ts#session`） | `Session` |
 | `analyzeSubject(ref, options, onProgress, signal)` | 落快照（`workbench.ts:364`） | `AnalysisResult<SubjectReport>` |
 | `analyzeThread(ref, commentId, …)` | 落快照；cache-first 下可由主体快照派生（`workbench.ts:368`，派生见 `workbench.ts:450`） | `AnalysisResult<ThreadReport>` |
 | `previewSubject(ref, options, …)` | 只算不存；整链重跑一遍（`workbench.ts:373`） | 同上 |
 | `previewRootsPage(ref, cursor, options, …)` | 只算不存；按游标取**一页**（`workbench.ts:378`） | `RootsPage` |
 | `previewThread(ref, commentId, …)` | 只算不存（`workbench.ts:382`） | `AnalysisResult<ThreadReport>` |
+| `locateComment(ref, commentId, …)` | 定点定位：快照已含零请求，否则 `seekRoot` 一次取回（`'seek'` 页键）（`workbench.ts#runLocate`） | `LocatedComment` |
 | `history()` / `openSnapshot(id)` / `deleteSnapshot(id)` | 索引读写（`workbench.ts:386/397/409`）；`openSnapshot` 缺快照抛 `PlatformError('not-found')` | `SnapshotSummary[]` / `AnalysisResult<…>` |
 | `clearCache()` / `cacheStats()` / `cacheUsage()` | 透传缓存（`workbench.ts:431-435`） | — |
 
@@ -39,14 +40,15 @@
 
 ## 关键决策（为何这样设计）
 
-- **一份页缓存键、按账号隔离**：键 = `cacheKey('page', subjectKey(ref), account, 'roots'|'thread', cursor ?? 'start')`（`crawl.ts:319,457,547`），`account = loggedIn ? 'u:<id>' : 'anon'`（`crawl.ts:310,454`）。注释写明理由：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户（`crawl.ts:309,453`）。
+- **页缓存键 = 账号 + 排序 + 定位三维**：键 = `cacheKey('page', subjectKey(ref), account, 'roots'|'thread', …)`（`crawl.ts#crawlSubject`、`crawl.ts#crawlRootsPage`、`crawl.ts#crawlThreadPages`），`account = loggedIn ? 'u:<id>' : 'anon'`。roots 页键在 cursor 前再带一个 `order` 段（`'time'`/`'hot'`，`report.ts#rootOrderOf` 缺省 `'time'`）：两种排序各自成链，互不共吃缓存。定位读取走 `'seek'` 键（`cacheKey('page', subjectKey(ref), account, 'seek', commentId)`），刻意不写成 `'roots|start'`——定位块不是第一页。
+- **session/nav 键带身份姿态**：`cacheKey('session', adapter.id, identity)`（`workbench.ts#loadSession`、`#session`、`#canReuseSnapshot`）与 `cacheKey('bilibili','nav', ctx.identity)`（`api.ts#loadNavData`），`identity` 来自 `HttpClient.identity`（`'direct'`/ `'page'`，`platform.ts#HttpClient`），经 `CrawlRunner.request` 注入 `FetchContext.identity`。同一份物理缓存下页面桥与扩展源直连各读各的登录态；WBI 密钥与身份无关，键保持全局。
 - **`next === null` 是「到底」的唯一权威判据**：否掉了「请求 N 条只回更少 = 没有下一页」的客户端算术推断——平台截断与真到底不可区分（`report.ts:222-224`；ADR-0003）。
 - **`crawlRootsPage` 只取一页**：否掉了「把上限加一页、从起点重跑整条游标链再整体替换」的旧写法；逐页追加、翻回已读页直接吃缓存（`crawl.ts:432-438`；ADR-0003）。
 - **`refresh` 三档各管一段**：`cache-first` 先试快照再吃分页缓存；`incremental`/`full` 顶层分页一律 `force` 回源，只有 `incremental` 额外复用「replyCount 未变且旧快照已抓全」的子树（`crawl.ts:307-308,351-370`；`report.ts:187-193`）。
 - **预览不落快照**：`preview*` 传 `persist=false`（`workbench.ts:373-384`）——首屏预览天然截断，写成 latest 会污染 cache-first 复用与历史（`workbench.ts:171-174`）。
 - **快照复用看「上限覆盖 + 登录态不弱于」**：`canReuseSnapshot`（`workbench.ts:132-145`）——未截断直接可用；已截断要求旧 `caps` 覆盖本次上限（0 = 不限视为已取尽），且匿名快照不得在已登录时复用。
 - **`force` 只在回源档位出现**：`LoadOptions.force`（`cache/types.ts:51-53`）由 `{force: !usePageCache}` 传入分页（`crawl.ts:322,460,550`），meta 用 `{force: refresh === 'full'}`（`crawl.ts:303`）。
-- **单飞在缓存层，不在抓取层**：`getOrLoad` 的 `inflight` 表保证同键并发只跑一次 loader（`cache/index.ts:34,122-150`；内存版同形 `memory.ts:64`）。
+- **单飞在缓存层，不在抓取层**：`getOrLoad` 的 `inflight` 表保证同键并发只跑一次 loader（`cache/index.ts#getOrLoad`；内存版同形 `memory.ts`）。跨文档再来一层：`CreateCacheOptions.locks`（默认 `navigator.locks`，`null` 关闭）把同键加载串行化到 Web Locks 里——拿到锁先复读一次，另一个文档刚写完的值按磁盘命中返回，loader 全链路只跑一次（实测：扩展源 iframe 与顶层扩展页共享同一份 IndexedDB 与锁空间）。锁设施故障降级为无锁回源；loader 抛错照旧透传不写缓存。
 - **缓存故障绝不阻断分析**：存储层只提供速度——读写异常一律 `degraded++` 并当作未命中/静默失败，只有 loader 自身错误透传且不写缓存（`cache/index.ts:17-19,60-63,111-113`；`cache/types.ts:1-8`）。
 - **礼貌「先占后用 + 名额转让」**：拿到并发名额时**同步**自增 `active`（`crawl.ts:95-98`），再以「预留时隙」`nextSlot` 做最小间隔等待——等待期间不读表、不连发（`crawl.ts:74-88`）；释放时若有人排队直接把名额转给队首（`crawl.ts:64-68`）；占位后被取消必须把名额让出去（`crawl.ts:79-86`）。每平台一个队列、跨 runner 共享（`workbench.ts:92-99`）。
 - **重试只认两类错**：`RETRYABLE = {rate-limited, network}`（`errors.ts:41,59-61`）；指数退避 + 抖动，base 1s / cap 30s / 最多 5 次，平台给了 `retryAfterMs` 就照它（`crawl.ts:135-152`）。重试、计数、进度统一收在 `CrawlRunner.request`（`crawl.ts:235-266`），`load` 只是「带缓存的 request」（`crawl.ts:271-275`）。

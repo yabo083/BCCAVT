@@ -114,6 +114,15 @@ export function createReaderHttp(options: {
   }
 
   return {
+    /**
+     * 身份姿态：桥活着时请求由页面上下文代发（'page'，带站点 Cookie）；
+     * 不在嵌入页或桥已判定不可用时退回扩展源直连（'direct'）。两种姿态平台可能
+     * 返回不同的登录态（例如 Cookie 设置不同），引擎据此给 session/nav 分键。
+     */
+    get identity(): string {
+      return bridgeDown || window.parent === window ? 'direct' : 'page';
+    },
+
     async getJson<T>(request: HttpRequest, signal: AbortSignal): Promise<T> {
       // 不在嵌入页里（本文档没有内容脚本当桥）或桥已判定不可用：直接走直连，连投递都不必
       if (bridgeDown || window.parent === window) return fallback.getJson<T>(request, signal);

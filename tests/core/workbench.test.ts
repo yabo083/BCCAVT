@@ -28,9 +28,10 @@ function tickingNow(): () => number {
   };
 }
 
-function build(adapter: FakeAdapter, extra: { sleep?: SleepFn; cache?: Cache } = {}): { workbench: Workbench; cache: Cache } {
+function build(adapter: FakeAdapter, extra: { sleep?: SleepFn; cache?: Cache; identity?: string } = {}): { workbench: Workbench; cache: Cache } {
   const cache = extra.cache ?? createCache({ dbName: uniqueDbName(), now: tickingNow() });
-  const workbench = createWorkbench({ adapters: [adapter], cache, http: createHttpClient(), now: tickingNow(), sleep: extra.sleep });
+  const http = extra.identity === undefined ? createHttpClient() : Object.assign(createHttpClient(), { identity: extra.identity });
+  const workbench = createWorkbench({ adapters: [adapter], cache, http, now: tickingNow(), sleep: extra.sleep });
   return { workbench, cache };
 }
 
@@ -472,6 +473,148 @@ describe('快照索引', () => {
     const second = await workbench.session('bilibili');
     expect(second.loggedIn).toBe(false);
     expect(adapter.calls.session).toBe(2);
+  });
+});
+
+describe('身份分键：同一份物理缓存下两种身份姿态互不喂错', () => {
+  it('session 键带身份维度：page 与 direct 各读各的登录态，页键也不互喂', async () => {
+    const cache = createCache({ dbName: uniqueDbName(), now: tickingNow() });
+    const pageAdapter = new FakeAdapter();
+    pageAdapter.session = { platform: 'bilibili', loggedIn: true, user: { id: 'u1', name: '页内用户' }, limitations: [] };
+    pageAdapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })]]);
+    const directAdapter = new FakeAdapter();
+    directAdapter.session = { platform: 'bilibili', loggedIn: false, limitations: ['未登录'] };
+    directAdapter.rootsProvider = pagedRoots([[makeComment({ id: 'rx' })]]);
+    const page = build(pageAdapter, { cache, identity: 'page' }).workbench;
+    const direct = build(directAdapter, { cache, identity: 'direct' }).workbench;
+    const signal = new AbortController().signal;
+
+    // page 侧先抓到登录态并写进 'session|bilibili|page'；direct 侧再吃 'session|bilibili|direct'，
+    // 旧共享键会直接命中 page 写下的登录 session —— 现在必须各发各的 getSession。
+    await page.previewRootsPage(pageAdapter.subject.ref, null, options({ refresh: 'cache-first' }), noop, signal);
+    await direct.previewRootsPage(directAdapter.subject.ref, null, options({ refresh: 'cache-first' }), noop, signal);
+
+    expect(pageAdapter.calls.session).toBe(1);
+    expect(directAdapter.calls.session).toBe(1);
+    // 页键按账号隔离：anon 侧读到自己的分页，不吃 u:u1 写下的那一份
+    expect(directAdapter.calls.roots).toBe(1);
+  });
+
+  it('同一账号：工作台（direct）整链抓过的页，阅读器（page）逐页 cache-first 直接命中', async () => {
+    const cache = createCache({ dbName: uniqueDbName(), now: tickingNow() });
+    const a = new FakeAdapter();
+    a.session = { platform: 'bilibili', loggedIn: true, user: { id: 'u1', name: '同一用户' }, limitations: [] };
+    a.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })], [makeComment({ id: 'r2' })]]);
+    const b = new FakeAdapter();
+    b.session = { platform: 'bilibili', loggedIn: true, user: { id: 'u1', name: '同一用户' }, limitations: [] };
+    const wa = build(a, { cache, identity: 'direct' }).workbench;
+    const wb = build(b, { cache, identity: 'page' }).workbench;
+    const signal = new AbortController().signal;
+
+    await wa.analyzeSubject(a.subject.ref, options({ refresh: 'full' }), noop, signal);
+    expect(a.calls.roots).toBe(2);
+
+    const first = await wb.previewRootsPage(a.subject.ref, null, options({ refresh: 'cache-first' }), noop, signal);
+    const second = await wb.previewRootsPage(a.subject.ref, first.next, options({ refresh: 'cache-first' }), noop, signal);
+
+    expect(first.roots.map((comment) => comment.id)).toEqual(['r1']);
+    expect(second.roots.map((comment) => comment.id)).toEqual(['r2']);
+    // 页键按账号（u:u1）共吃：B 的分页一次都不回源；
+    // session 键按身份姿态分开：B 自己的 'session|bilibili|page' 必须各发各的 getSession
+    expect(b.calls.roots).toBe(0);
+    expect(b.calls.session).toBe(1);
+  });
+
+  it('身份姿态是活的：identity getter 翻面后，下一次 session 用新键重新回源', async () => {
+    const adapter = new FakeAdapter();
+    adapter.session = { platform: 'bilibili', loggedIn: true, user: { id: 'u1', name: '用户' }, limitations: [] };
+    const cache = createCache({ dbName: uniqueDbName(), now: tickingNow() });
+    let posture = 'page';
+    const http = {
+      // 注意不能用 Object.assign/spread 拷贝 getter——它们会即刻取值固化成数据属性
+      ...createHttpClient(),
+      get identity(): string {
+        return posture;
+      },
+    };
+    const workbench = createWorkbench({ adapters: [adapter], cache, http, now: tickingNow() });
+    const signal = new AbortController().signal;
+
+    await workbench.previewRootsPage(adapter.subject.ref, null, options({ refresh: 'cache-first' }), noop, signal);
+    expect(adapter.calls.session).toBe(1); // 写进 'session|bilibili|page'
+
+    posture = 'direct'; // 桥挂掉：姿态翻面，绝不能吃 'page' 姿态写下的那份 session
+    adapter.rootsProvider = pagedRoots([[makeComment({ id: 'rx' })]]);
+    await workbench.previewRootsPage(adapter.subject.ref, null, options({ refresh: 'cache-first' }), noop, signal);
+
+    expect(adapter.calls.session).toBe(2); // 新键 'session|bilibili|direct' 未命中 → 回源
+  });
+});
+
+describe('定位一条评论（locateComment）', () => {
+  const root = makeComment({ id: 'r1', replyCount: 2 });
+  const replies = [makeComment({ id: 'c1', rootId: 'r1', parentId: 'r1' }), makeComment({ id: 'c2', rootId: 'r1', parentId: 'c1' })];
+
+  function withTree(): FakeAdapter {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([[root]]);
+    adapter.threadProvider = (commentId, cursor) => pagedThread(root, replies, 10)(commentId, cursor);
+    return adapter;
+  }
+
+  it('最新主体快照已含该评论：零请求，source 为 snapshot', async () => {
+    const adapter = withTree();
+    const { workbench } = build(adapter);
+    const signal = new AbortController().signal;
+
+    await workbench.analyzeSubject(adapter.subject.ref, options(), noop, signal);
+    adapter.resetCalls();
+
+    const found = await workbench.locateComment(adapter.subject.ref, 'c2', noop, signal);
+
+    expect(adapter.totalCalls).toBe(0);
+    expect(found.source).toBe('snapshot');
+    expect(found.root.id).toBe('r1');
+    expect(found.comments.map((comment) => comment.id).sort()).toEqual(['c1', 'c2', 'r1']);
+  });
+
+  it('快照里没有：一次 seekRoot 取回根评论块；同一 id 再定位走缓存不再回源', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([[makeComment({ id: 'other' })]]);
+    const sought = { root, items: [root, ...replies] };
+    adapter.seekRoot = async (_subject, commentId) => {
+      adapter.calls.seek++;
+      if (commentId !== 'c2') throw new PlatformError('not-found', '评论不存在或已删除');
+      return sought;
+    };
+    const { workbench } = build(adapter);
+    const signal = new AbortController().signal;
+
+    const first = await workbench.locateComment(adapter.subject.ref, 'c2', noop, signal);
+    expect(first.source).toBe('network');
+    expect(first.comments.map((comment) => comment.id)).toEqual(['r1', 'c1', 'c2']);
+    expect(adapter.calls.seek).toBe(1);
+
+    adapter.resetCalls();
+    const second = await workbench.locateComment(adapter.subject.ref, 'c2', noop, signal);
+    expect(second.source).toBe('cache');
+    expect(adapter.calls.seek).toBe(0);
+  });
+
+  it('seekRoot 抛 not-found 原样透传；适配器不支持 seek 时抛 unavailable', async () => {
+    const adapter = new FakeAdapter();
+    adapter.seekRoot = async () => {
+      throw new PlatformError('not-found', '评论不存在或已删除');
+    };
+    const { workbench } = build(adapter);
+    const signal = new AbortController().signal;
+
+    await expect(workbench.locateComment(adapter.subject.ref, 'ghost', noop, signal)).rejects.toMatchObject({ kind: 'not-found' });
+
+    const plain = new FakeAdapter();
+    const other = build(plain).workbench;
+    await expect(other.locateComment(plain.subject.ref, 'ghost', noop, signal)).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(plain.calls.session).toBe(0);
   });
 });
 

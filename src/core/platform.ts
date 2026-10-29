@@ -3,7 +3,7 @@
  * 没有动态加载、没有插件框架：接口极简，换平台只换实现。
  */
 import type { Cache } from './cache/types';
-import type { Cursor, Page, PlatformId, Session, Subject, SubjectRef, Target, ThreadPage, Comment } from './model';
+import type { Cursor, Page, PlatformId, RootOrder, Session, Subject, SubjectRef, Target, ThreadPage, Comment } from './model';
 
 export interface HttpRequest {
   /** 绝对 URL，查询串已由适配器拼好（含签名）。 */
@@ -27,6 +27,12 @@ export interface HttpClient {
    * 参数里可能带写操作的凭据（csrf），实现方绝不能把参数写进日志、错误文本或缓存键。
    */
   postForm(url: string, params: Record<string, string>): Promise<unknown>;
+  /**
+   * 该传输层发出请求时所处的身份姿态（`'page'` = 由站点页面上下文代发，带站点 Cookie；
+   * 缺省视为 `'direct'` = 扩展源直连）。引擎把它传给适配器的 FetchContext，供「与身份绑定的
+   * 数据」（登录态 nav 等）建键；它不承诺登录与否，只承诺「从哪里发」。
+   */
+  readonly identity?: string;
 }
 
 export interface FetchContext {
@@ -34,6 +40,8 @@ export interface FetchContext {
   /** 适配器私有的小型缓存（如 WBI 密钥）。键由适配器自行加平台前缀。 */
   cache: Cache;
   signal: AbortSignal;
+  /** 本次请求的身份姿态：与 `HttpClient.identity` 同源（`'direct'` / `'page'`）。 */
+  identity: string;
 }
 
 /** 扩展为该平台请求改写的请求头（如 Origin/Referer）。由后台以 declarativeNetRequest 下发，仅作用于扩展自身发起的请求。 */
@@ -102,14 +110,29 @@ export interface PlatformAdapter {
   getSubject(ref: SubjectRef, ctx: FetchContext): Promise<Subject>;
 
   /**
-   * 顶层评论分页（按时间，保证可遍历完整）。items 可以夹带平台内联预览的楼中楼（rootId 非 null），
+   * 顶层评论分页。items 可以夹带平台内联预览的楼中楼（rootId 非 null），
    * 引擎按 id 去重，并以 replyCount 与已知回复数比较决定是否需要 listThread。
+   * order 是排序维度：'time' 按时间、保证可遍历完整；'hot' 平台热度序，分页形态由适配器决定。
    */
-  listRoots(subject: Subject, cursor: Cursor | null, ctx: FetchContext): Promise<Page<Comment>>;
+  listRoots(subject: Subject, cursor: Cursor | null, order: RootOrder, ctx: FetchContext): Promise<Page<Comment>>;
 
   /** 一棵评论树的回复分页。commentId 可为楼中楼，适配器负责定位真实根；首页必须带 root。 */
   listThread(subject: Subject, commentId: string, cursor: Cursor | null, ctx: FetchContext): Promise<ThreadPage>;
 
+  /**
+   * 可选：按评论 id 定点取回它所在的根评论块（一次请求的「定位读取」，不翻页）。
+   * 平台没有 seek 语义时缺省，调用方按 unavailable 处理；找不到该评论应抛 not-found。
+   */
+  seekRoot?(subject: Subject, commentId: string, ctx: FetchContext): Promise<SeekResult>;
+
   /** 可选写能力（点赞 / 回复）；缺省表示该平台只读。 */
   readonly writes?: PlatformWrites;
+}
+
+/** 定点定位的结果：目标评论所在的根评论块。 */
+export interface SeekResult {
+  /** 目标所在的根评论（commentId 本身是根时就是它）。 */
+  root: Comment;
+  /** 根 + 平台内联的楼中楼预览，按 id 去重（含目标评论）。 */
+  items: Comment[];
 }

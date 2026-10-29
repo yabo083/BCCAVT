@@ -11,7 +11,7 @@
  */
 import { cacheKey } from '../../core/cache/types';
 import { PlatformError, type PlatformErrorKind } from '../../core/errors';
-import type { Author, Comment, Session, Subject, SubjectRef } from '../../core/model';
+import type { Author, Comment, RootOrder, Session, Subject, SubjectRef } from '../../core/model';
 import type {
   FetchContext,
   HttpClient,
@@ -25,7 +25,13 @@ import { httpsImageUrl, normalizeReply } from './normalize';
 import { keyFromWbiUrl, signQuery, type WbiKeys } from './wbi';
 
 const API_BASE = 'https://api.bilibili.com';
-const NAV_KEY = cacheKey('bilibili', 'nav');
+/**
+ * nav 键按身份姿态分键：页面桥（'page'，带站点 Cookie）与扩展源直连（'direct'）是两种
+ * 发送姿态，平台可能返回不同的登录态（例如 Cookie 设置不同时）；谁先写谁生效的共享键
+ * 会把另一边的身份喂给这边。
+ * WBI 密钥与身份无关，键保持全局。
+ */
+const navKey = (identity: string): string => cacheKey('bilibili', 'nav', identity);
 const WBI_KEYS_KEY = cacheKey('bilibili', 'wbi-keys');
 
 /**
@@ -101,7 +107,7 @@ async function requestData(url: string, ctx: FetchContext): Promise<unknown> {
 
 /** nav 响应本身带登录态与 WBI 密钥，30 分钟缓存（session 级）。未登录时平台返回 -101，但 data 依然可用。 */
 export async function loadNavData(ctx: FetchContext): Promise<RawObject> {
-  const { value } = await ctx.cache.getOrLoad<RawObject>(NAV_KEY, 'session', async () => {
+  const { value } = await ctx.cache.getOrLoad<RawObject>(navKey(ctx.identity), 'session', async () => {
     const envelope = readEnvelope(await ctx.http.getJson({ url: `${API_BASE}/x/web-interface/nav` }, ctx.signal));
     if (envelope.code !== 0 && envelope.code !== -101) throw codeToError(envelope.code, envelope.message);
     return asRecord(envelope.data, 'nav.data');
@@ -198,20 +204,30 @@ export interface RawRootPage {
   upperMid: string | null;
 }
 
-/** 顶层评论分页（mode=2 按时间，保证可遍历）。 */
+/**
+ * 顶层评论分页。mode 取值（2026-10-29 实测于 Chrome 156，视频 BV1DXaG6TETt）：
+ * support_mode=[2,3]；2 = 按时间（保证可遍历完整），3 = 热度序（页码式游标）；
+ * 两种序全量走完整条游标链得到同一组根评论（583 条、零重复），top_replies 一致。
+ * seekId 非空时附带 seek_rpid：平台把目标所在的**根评论**置顶在 replies[0]，
+ * 其余是正常第一页，游标与正常首页一致——「按评论 id 定位」就靠它；
+ * seek 目标是楼中楼时，它会出现在 replies[0].replies（内联预览）里。
+ */
 export async function fetchRootPage(
   locator: SubjectLocator,
   cursor: string | null,
+  order: RootOrder,
   ctx: FetchContext,
+  seekId?: string,
 ): Promise<RawRootPage> {
   const query = await signedQuery(
     {
       oid: locator.oid,
       type: locator.type,
-      mode: 2,
+      mode: order === 'hot' ? 3 : 2,
       plat: 1,
       web_location: 1315875,
       pagination_str: JSON.stringify({ offset: cursor ?? '' }),
+      ...(seekId === undefined ? {} : { seek_rpid: seekId }),
     },
     ctx,
   );

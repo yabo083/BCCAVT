@@ -1,5 +1,5 @@
 import { PlatformError } from '@/core/errors';
-import type { Comment, Cursor, Page, PlatformId, Session, Subject, SubjectRef, Target, ThreadPage } from '@/core/model';
+import type { Comment, Cursor, Page, PlatformId, RootOrder, Session, Subject, SubjectRef, Target, ThreadPage } from '@/core/model';
 import type { HeaderRewrite, PlatformAdapter, Politeness } from '@/core/platform';
 
 export function makeComment(input: Partial<Comment> & { id: string }): Comment {
@@ -71,19 +71,23 @@ export class FakeAdapter implements PlatformAdapter {
   rootFailures: PlatformError[] = [];
   threadFailures: PlatformError[] = [];
 
-  calls = { session: 0, subject: 0, roots: 0, thread: 0 };
+  calls = { session: 0, subject: 0, roots: 0, thread: 0, seek: 0 };
   rootCursors: Array<Cursor | null> = [];
+  rootOrders: RootOrder[] = [];
   threadCalls: Array<{ commentId: string; cursor: Cursor | null }> = [];
+  /** 定位读取能力：测试按需赋值；不设则适配器视为「不支持 seek」（unavailable）。 */
+  seekRoot?: PlatformAdapter['seekRoot'];
   inFlight = 0;
   maxInFlight = 0;
 
   get totalCalls(): number {
-    return this.calls.session + this.calls.subject + this.calls.roots + this.calls.thread;
+    return this.calls.session + this.calls.subject + this.calls.roots + this.calls.thread + this.calls.seek;
   }
 
   resetCalls(): void {
-    this.calls = { session: 0, subject: 0, roots: 0, thread: 0 };
+    this.calls = { session: 0, subject: 0, roots: 0, thread: 0, seek: 0 };
     this.rootCursors = [];
+    this.rootOrders = [];
     this.threadCalls = [];
     this.inFlight = 0;
     this.maxInFlight = 0;
@@ -103,9 +107,10 @@ export class FakeAdapter implements PlatformAdapter {
     return this.subject;
   }
 
-  async listRoots(_subject: Subject, cursor: Cursor | null): Promise<Page<Comment>> {
+  async listRoots(_subject: Subject, cursor: Cursor | null, order: RootOrder): Promise<Page<Comment>> {
     this.calls.roots++;
     this.rootCursors.push(cursor);
+    this.rootOrders.push(order);
     this.inFlight++;
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     try {

@@ -4,8 +4,8 @@
  */
 import { PlatformError } from '../../core/errors';
 import { createHttpClient } from '../../core/http';
-import type { Comment, Cursor, Page, Subject, SubjectRef, ThreadPage } from '../../core/model';
-import type { FetchContext, PlatformAdapter } from '../../core/platform';
+import type { Comment, Cursor, Page, RootOrder, Subject, SubjectRef, ThreadPage } from '../../core/model';
+import type { FetchContext, PlatformAdapter, SeekResult } from '../../core/platform';
 import {
   createBilibiliWrites,
   fetchRootPage,
@@ -39,8 +39,8 @@ async function getSubject(ref: SubjectRef, ctx: FetchContext): Promise<Subject> 
   return subject;
 }
 
-async function listRoots(subject: Subject, cursor: Cursor | null, ctx: FetchContext): Promise<Page<Comment>> {
-  const page = await fetchRootPage(locatorOf(subject), cursor, ctx);
+async function listRoots(subject: Subject, cursor: Cursor | null, order: RootOrder, ctx: FetchContext): Promise<Page<Comment>> {
+  const page = await fetchRootPage(locatorOf(subject), cursor, order, ctx);
   const upperMid = page.upperMid ?? undefined;
   const items: Comment[] = [];
   const seen = new Set<string>();
@@ -92,6 +92,40 @@ function decodeThreadCursor(cursor: Cursor): { root: string; offset: string } {
   }
 }
 
+/**
+ * 按评论 id 定点取回它所在的根评论块：seek_rpid 让平台把目标的根评论置顶在 replies[0]
+ * （目标是楼中楼时它会出现在 replies[0].replies 的内联预览里）。
+ * 只收 replies[0] 这一块：返回的根 id 必须是 commentId 本身、或其内联预览里含有它——
+ * 都对不上（含空 replies）就是「评论不存在或已删除」，绝不把碰巧排在第一的另一条评论交回去。
+ */
+async function seekRoot(subject: Subject, commentId: string, ctx: FetchContext): Promise<SeekResult> {
+  const page = await fetchRootPage(locatorOf(subject), null, 'time', ctx, commentId);
+  const first = page.replies[0];
+  if (first === undefined) {
+    throw new PlatformError('not-found', '评论不存在或已删除', { platform: 'bilibili' });
+  }
+  const upperMid = page.upperMid ?? undefined;
+  const root = normalizeReply(first.reply, { upperMid, path: 'replies[0]' });
+  const items: Comment[] = [];
+  const seen = new Set<string>();
+  const push = (comment: Comment): void => {
+    if (seen.has(comment.id)) return;
+    seen.add(comment.id);
+    items.push(comment);
+  };
+  push(root);
+  let found = root.id === commentId;
+  for (const [index, raw] of first.previews.entries()) {
+    const preview = normalizeReply(raw, { upperMid, path: `replies[0].replies[${index}]` });
+    if (preview.id === commentId) found = true;
+    push(preview);
+  }
+  if (!found) {
+    throw new PlatformError('not-found', '评论不存在或已删除', { platform: 'bilibili' });
+  }
+  return { root, items };
+}
+
 async function listThread(
   subject: Subject,
   commentId: string,
@@ -129,6 +163,7 @@ export const bilibiliAdapter: PlatformAdapter = {
   getSubject,
   listRoots,
   listThread,
+  seekRoot,
   // 写请求也走同一套传输层（带 Cookie、同一份 Origin/Referer 改写与风控退避）：
   // 内容脚本拿到这个实例后，用内容脚本上下文的 fetch 发出请求。
   writes: createBilibiliWrites(createHttpClient()),

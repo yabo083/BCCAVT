@@ -4,7 +4,6 @@
  */
 import { adapters } from '@/platforms';
 import { createCache } from '@/core/cache';
-import { createMemoryCache } from '@/core/cache/memory';
 import { createHttpClient } from '@/core/http';
 import { createWorkbench } from '@/core/workbench';
 import { createAiService } from '@/ai';
@@ -22,13 +21,17 @@ export const ai = createAiService({ cache, storage: chromeSettingsStorage });
  * （同站、带 Cookie，因此能读到原生那份全量，而不是扩展源直连被平台截断的那 315 条）。
  * 桥不可用时退回 http（扩展源直连、匿名），语义与改造前一致。
  *
- * 缓存只在本文档内存里，不落盘：分页是按「session 推出的账号」建键的，而 session 键本身没有账号维度
- * （谁先写谁生效）。阅读器是登录态读取，工作台 / 弹窗是匿名读取，共用一份磁盘缓存就会互相喂错身份——
- * 匿名那边会拿登录态 session 把截断结果写进登录态的键下（反向则读到截断结果），隔离在缓存实例上最省事。
- * 阅读器只做预览（不落快照、不写历史），因此少了这份磁盘缓存不丢任何已有行为。
+ * 它和工作台**共用同一份 IndexedDB 存储**（各自一个 createCache 实例，底层同一个 'loupe' 库）。
+ * 此前给阅读器单开内存缓存，是因为 session 键没有身份维度会互喂错身份；现在共享是安全的：
+ * session/nav 键带身份姿态维度（readerHttp.identity：'page' vs 'direct'），页键带账号维度
+ * （u:<mid> / anon）——两边同账号读同一组页，不同身份各读各的登录态。
+ * 实测依据（2026-10-29，Chrome 156）：扩展源 iframe 与顶层扩展页共享同一份 IndexedDB
+ * **和**同一份 Web Locks 空间（跨文档单飞因此可行，见 cache/index.ts）；
+ * 已登录时页面上下文、扩展页直连、扩展 iframe 直连对 x/web-interface/nav 读到同一个
+ * 登录用户（旧注释「工作台按匿名读取」是错的）。
  */
 export const readerHttp = createReaderHttp({ fallback: http });
-export const readerWorkbench = createWorkbench({ adapters, cache: createMemoryCache(), http: readerHttp });
+export const readerWorkbench = createWorkbench({ adapters, cache, http: readerHttp });
 
 /**
  * 首个网络请求前调用：等后台把 DNR 请求头改写规则注册好。

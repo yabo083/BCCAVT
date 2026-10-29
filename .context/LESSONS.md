@@ -121,6 +121,14 @@
 
 **相关位置**：`src/extension/page-comments.ts`（`READER_LOCATE` / `LOCATE_PENDING_KEY` / `videoIdOf`）、`src/extension/background.ts`（挑标签页 + 激活 + 转发 / 无标签页则写待办并新建）、`src/extension/content/page-reader.ts#queueLocate`、`src/ui/EmbeddedComments.vue#locateComment`、`src/ui/theme.ts#watchPalette`、[ADR-0007](../docs/adr/0007-theme-palette-tokens.md)、[ADR-0008](../docs/adr/0008-locate-in-reader.md)。
 
+## L-15 共享取数层：三条实测事实与两个验收坑（2026-10-29，Chrome 156）
+
+- **存储不分区**：嵌在 B 站页里的扩展 iframe 与顶层扩展页共享同一份 IndexedDB 与 Web Locks（判据：扩展页写标记 → iframe 读到；扩展页持锁时 iframe `ifAvailable` 拿不到）。所以阅读器缓存不必经后台中转，跨文档单飞用 `navigator.locks`（`src/core/cache/index.ts#createCache`）。
+- **身份**：已登录时页面上下文、扩展页直连、扩展 iframe 直连的 nav 是同一用户。session/nav 仍按发起位置分键（`HttpClient.identity`），是为了防住「不同 Cookie 设置下两边身份不同」时互相喂错，而不是因为直连必然匿名。
+- **seek_rpid 不是「目标所在页」**：它把目标的根评论插到第一页的第 0 位，其余还是正常第一页。结果必须单独建键（`…|seek|<id>`），写进 `roots|start` 会污染第一页。
+- **坑：登录 Cookie 复制不过去**：Chrome 的 App-Bound（v20）加密把 Cookie 绑在原 profile 上，复制到调试 profile 后解不开，Chrome 直接丢掉这些行。调试 Chrome 只能在里面重新登录一次。
+- **坑：持连接的文档会卡住删库**：某个文档还开着 `loupe` 库时，`indexedDB.deleteDatabase` 会排队，其它文档的 `open()` 跟着挂起（阅读器停在「获取登录态 · 已取 0 条」）。要先关掉工作台标签页再删库；以后要升 IndexedDB 版本，`DiskStore` 必须处理 `versionchange` 主动关闭连接。
+
 ## L-14 配置项「看起来生效了」与实际生效面的距离
 
 **现象**（该功能已按用户实机反馈整体移除）**：设置弹窗里曾有一个「放大镜门限」——文案写「评论及其回复总量超过它才出现分析入口」，实现只落在页面原生操作行那一侧；自绘评论区是另一个文档，从没接过这个值，于是自绘区的「图谱」按钮一直显示。用户读文案、看自绘区，直接判定「这属于 tooltip 和实际功能不对应」。结论是功能与设置项一并删除：原生评论行与自绘行的入口都不再按评论量判定。

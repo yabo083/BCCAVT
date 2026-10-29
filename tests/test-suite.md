@@ -26,7 +26,7 @@
 | RDR-04 | 扩展重载/更新后的熔断 | 页面已就绪 | 在 `chrome://extensions` 重载扩展，再滚动页面 | 评论区被还原为原生；控制台只留一条可理解的警告；不再重复抛错 | `page-reader.ts`（`isExtensionContextInvalidated` → `stop`） |
 | RDR-06 | 作者入口复刻原生（点击开主页 / 悬停出站点卡片） | 扩展已装、开着替换评论区；站点未改版 | ① 点阅读器里的头像或昵称 ② 悬停头像，等卡片出现 ③ 把指针移到卡片上，再移开 ④ 移开作者但仍在阅读器内 | ① 新标签打开 `https://space.bilibili.com/<mid>`；② 宿主页面出现站点自己的 `bili-user-profile`，`uid` 与悬停行一致、名字一致；③ 指针在卡片上时**保持打开**（关注/发消息可点），移开后收起；④ 卡片收起（`h=0`） | [ADR-0005](../docs/adr/0005-native-author-entries-via-site-component.md)、`src/extension/content/user-card.ts`、`src/ui/components/PageCommentRow.vue#hoverUser` |
 | RDR-05 | 嵌入页首帧加载失败 | 人为让 `embedded.html` 加载失败 | 等 20s | 槽位被撤掉、原生评论区可用，并暂停自动重试直到下一次导航/开关变化 | `page-reader.ts`（`READY_TIMEOUT_MS`） |
-| RDR-07 | 图谱/工作台 → 评论区定位（跨三个上下文） | 已装扩展、开着替换评论区、工作台里已有该视频的结果并选中一条评论 | 点详情卡「在评论区定位」 | ① 宿主页面滚到该行（`scrollY` 改变，行居中）；② 目标行出现 `selected` 与 `flash-highlight`；③ 目标被祖先折叠时先展开、落在渲染上限之外时先抬上限；④ 目标不在已读范围内时给「不在已读范围」提示，**不造行、不滚到别处** | [ADR-0008](../docs/adr/0008-locate-in-reader.md)、`EmbeddedComments.vue#locateComment`、`page-reader.ts#flushLocate` |
+| RDR-07 | 图谱/工作台 → 评论区定位（跨三个上下文） | 已装扩展、开着替换评论区、工作台里已有该视频的结果并选中一条评论 | 点详情卡「在评论区定位」 | ① 宿主页面滚到该行（`scrollY` 改变，行居中）；② 目标行出现 `selected` 与 `flash-highlight`；③ 目标被祖先折叠时先展开、落在渲染上限之外时先抬上限；④ 目标不在已读范围内时经 `seek_rpid` 取回它的根评论块钉在流上方（定位块：目标行 `selected` + `flash-highlight`，流序不动；评论已删除时给「不存在或已被删除」提示） | [ADR-0008](../docs/adr/0008-locate-in-reader.md)、[ADR-0009](../docs/adr/0009-located-comment-pinned-block.md)、`EmbeddedComments.vue#locateComment`、`page-reader.ts#flushLocate` |
 | RDR-08 | 定位的反例：同一视频开着多枚标签页 | 同一视频 URL 开着 ≥2 枚标签页 | 从工作台点「在评论区定位」 | 消息投给后台挑中的那一枚（按视频身份，不认「当前可见」），另一枚不动——这是已知语义，不是 bug | `.context/LESSONS.md` L-13、ADR-0008 |
 
 ## 2. 注入时序与站点改版（INJ）
@@ -57,6 +57,9 @@
 | CORE-02 | 真实风控退避 | 连续快速滚动触发限流 | 观察进度与耗时 | 出现「平台限流，退避等待中…」；等待时长与平台 `Retry-After` 一致；恢复后不放大抖动 | `src/core/crawl.ts`（`withRetry` / `PoliteQueue`） |
 | CORE-03 | DNR 请求头改写真的生效 | 已装扩展 | 打开 Network 面板看扩展自身发出的 api 请求 | 带扩展形态的 `Origin`/`Referer`；缺规则时平台返回 `-403` 类错误 | `src/extension/background.ts`（`initiatorDomains: [chrome.runtime.id]`） |
 | CORE-04 | 缓存跨会话生效 | 已抓过一次同一视频 | 关闭再打开该视频页 | 首屏不再重复请求已有分页（命中缓存）；登录态变化时**不得**复用匿名的页缓存 | `src/core/crawl.ts`（页缓存键 + 账号隔离） |
+| CORE-05 | 工作台与阅读器共用一份存储（身份分键） | 登录态；同一视频先在放大镜窗口跑过完整分析 | 打开该视频页的阅读器滚前两页 | 已抓过的页不再回源（IDB 里同一组 `u:<mid>` 页键被两边共用）；`session` 与 `nav` 键按身份姿态分开（`*|page` / `*|direct`）互不覆盖 | `src/ui/services.ts#readerWorkbench`、`workbench.ts#loadSession`、`api.ts#loadNavData` |
+| CORE-06 | 跨文档同键单飞（Web Locks） | 同一视频同时开着阅读器与工作台 | 两边几乎同时触发同一页取数 | 平台只收到一次该页请求；另一边按磁盘命中返回 | `src/core/cache/index.ts#getOrLoad`（`locks.request`）、ADR-0009 |
+| CORE-07 | 定位未读评论端到端 | 工作台选中一条不在已读范围内的评论 | 点「在评论区定位」 | 评论流上方出现定位块（标题「定位到的评论」+ 根评论块）；目标行居中闪烁；主流行序不变；点 × 关闭块并允许缩高 | `workbench.ts#runLocate`、`src/platforms/bilibili/index.ts#seekRoot`、`EmbeddedComments.vue#locateComment`、ADR-0009 |
 
 ## 5. 写操作的真实后果（WRITE）
 

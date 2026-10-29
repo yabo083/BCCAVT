@@ -5,6 +5,7 @@ import { subjectKey } from './model';
 import type { Comment, Cursor, Page, Session, Subject, SubjectRef, ThreadPage } from './model';
 import type { FetchContext, HttpClient, PlatformAdapter, Politeness } from './platform';
 import type { CrawlOptions, CrawlPhase, CrawlProgress, FetchStats, RootsPage, Snapshot } from './report';
+import { rootOrderOf } from './report';
 
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
 
@@ -240,7 +241,12 @@ export class CrawlRunner {
           withRetry(
             () => {
               stats.requests++;
-              return fn({ http: this.deps.http, cache: this.deps.cache, signal: this.deps.signal });
+              return fn({
+                http: this.deps.http,
+                cache: this.deps.cache,
+                signal: this.deps.signal,
+                identity: this.deps.http.identity ?? 'direct',
+              });
             },
             {
               signal: this.deps.signal,
@@ -308,6 +314,7 @@ export async function crawlSubject(
   const usePageCache = options.refresh === 'cache-first';
   // 页面缓存必须按账号隔离：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户。
   const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
+  const order = rootOrderOf(options);
   const roots: Comment[] = [];
   const rootIds = new Set<string>();
   const listed: Comment[] = [];
@@ -316,9 +323,9 @@ export async function crawlSubject(
   for (;;) {
     throwIfAborted(runner.signal);
     const page: Page<Comment> = await runner.load<Page<Comment>>(
-      cacheKey('page', subjectKey(ref), account, 'roots', cursor ?? 'start'),
+      cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
       'page',
-      (ctx) => adapter.listRoots(subject, cursor, ctx),
+      (ctx) => adapter.listRoots(subject, cursor, order, ctx),
       { force: !usePageCache },
     );
     for (const item of page.items) {
@@ -452,11 +459,12 @@ export async function crawlRootsPage(
 
   // 页面缓存必须按账号隔离：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户。
   const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
+  const order = rootOrderOf(options);
   const usePageCache = options.refresh === 'cache-first';
   const page = await runner.load<Page<Comment>>(
-    cacheKey('page', subjectKey(ref), account, 'roots', cursor ?? 'start'),
+    cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
     'page',
-    (ctx) => adapter.listRoots(subject, cursor, ctx),
+    (ctx) => adapter.listRoots(subject, cursor, order, ctx),
     { force: !usePageCache },
   );
 

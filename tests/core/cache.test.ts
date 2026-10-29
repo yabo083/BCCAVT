@@ -126,6 +126,68 @@ describe('getOrLoad 单飞', () => {
   });
 });
 
+describe('跨文档单飞（Web Locks）', () => {
+  /** 串行化的假 LockManager：同名锁排队执行（真实 Web Locks 的语义）。 */
+  function serializingLocks(): { locks: Pick<LockManager, 'request'>; names: string[] } {
+    const names: string[] = [];
+    let tail = Promise.resolve();
+    return {
+      names,
+      locks: {
+        request<T>(name: string, callback: () => Promise<T>): Promise<T> {
+          names.push(name);
+          const run = tail.then(callback);
+          tail = run.then(
+            () => undefined,
+            () => undefined,
+          );
+          return run;
+        },
+      } as Pick<LockManager, 'request'>,
+    };
+  }
+
+  it('两个缓存实例并发取同一键：loader 只跑一次，后拿到锁的按磁盘命中返回', async () => {
+    const dbName = uniqueDbName();
+    const { locks, names } = serializingLocks();
+    const a = createCache({ dbName, locks });
+    const b = createCache({ dbName, locks });
+    let loads = 0;
+    const loader = async (): Promise<number> => {
+      loads++;
+      return 42;
+    };
+    const key = cacheKey('page', 'shared');
+
+    const [ra, rb] = await Promise.all([a.getOrLoad(key, 'page', loader), b.getOrLoad(key, 'page', loader)]);
+
+    expect(loads).toBe(1);
+    expect(names).toEqual([`loupe-cache|${key}`, `loupe-cache|${key}`]);
+    const results = [ra, rb];
+    expect(results.filter((r) => r.source === 'network')).toHaveLength(1);
+    expect(results.filter((r) => r.source === 'disk')).toHaveLength(1);
+    expect(results.map((r) => r.value)).toEqual([42, 42]);
+  });
+
+  it('locks: null 时行为不变：两个实例各跑各的 loader', async () => {
+    const dbName = uniqueDbName();
+    const a = createCache({ dbName, locks: null });
+    const b = createCache({ dbName, locks: null });
+    let loads = 0;
+    const loader = async (): Promise<number> => {
+      loads++;
+      await Promise.resolve();
+      return 1;
+    };
+    const key = cacheKey('page', 'nolock');
+    const [ra, rb] = await Promise.all([a.getOrLoad(key, 'page', loader), b.getOrLoad(key, 'page', loader)]);
+
+    expect(loads).toBe(2);
+    expect(ra.source).toBe('network');
+    expect(rb.source).toBe('network');
+  });
+});
+
 describe('LRU 淘汰', () => {
   it('内存层按访问顺序淘汰', async () => {
     const cache = createCache({ dbName: uniqueDbName(), memoryEntries: 2 });

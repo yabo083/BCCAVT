@@ -48,7 +48,12 @@ export function createReaderWriteExecutor(adapter: PlatformAdapter): ReaderWrite
   async function loadSubject(href: string): Promise<Subject> {
     const target = adapter.parseTarget(href);
     if (target === null) throw new Error('当前页面不是可写评论的 B 站视频页');
-    const ctx: FetchContext = { http: createHttpClient(), cache: createMemoryCache(), signal: new AbortController().signal };
+    const ctx: FetchContext = {
+      http: createHttpClient(),
+      cache: createMemoryCache(),
+      signal: new AbortController().signal,
+      identity: 'page',
+    };
     return adapter.getSubject(target.subject, ctx);
   }
 

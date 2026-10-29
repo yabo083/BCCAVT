@@ -4,7 +4,7 @@
  */
 import type { CacheStats } from './cache/types';
 import type { PlatformAdapter } from './platform';
-import type { Author, Comment, Cursor, PlatformId, Session, Subject, SubjectRef, Target } from './model';
+import type { Author, Comment, Cursor, PlatformId, RootOrder, Session, Subject, SubjectRef, Target } from './model';
 
 // ───────────────────────── 快照 ─────────────────────────
 
@@ -198,6 +198,13 @@ export interface CrawlOptions {
   maxRoots: number;
   /** 单棵评论树回复上限；0 = 不限。 */
   maxRepliesPerThread: number;
+  /** 顶层评论的排序维度；缺省 'time'（保证可遍历完整）。 */
+  order?: RootOrder;
+}
+
+/** 抓取选项里的顶层排序：缺省 'time'。页缓存键也按它隔离（两种序各自成链）。 */
+export function rootOrderOf(options: Pick<CrawlOptions, 'order'>): RootOrder {
+  return options.order ?? 'time';
 }
 
 /** 默认全量抓取、不限上限。 */
@@ -240,6 +247,19 @@ export interface RootsPage {
 export interface ResolvedInput {
   adapter: PlatformAdapter;
   target: Target;
+}
+
+/**
+ * 「定位到这条评论」的结果：目标所在的根评论块。
+ * source 说明这份数据从哪来——快照零请求、缓存命中回读、或本次新发的定位请求。
+ */
+export interface LocatedComment {
+  subject: Subject;
+  /** 目标所在的根评论。 */
+  root: Comment;
+  /** 根 + 它的回复（快照来源时是快照里已抓到的；seek 来源时是根 + 内联预览）。 */
+  comments: Comment[];
+  source: 'snapshot' | 'cache' | 'network';
 }
 
 export interface Workbench {
@@ -295,6 +315,17 @@ export interface Workbench {
     onProgress: (progress: CrawlProgress) => void,
     signal: AbortSignal,
   ): Promise<AnalysisResult<ThreadReport>>;
+  /**
+   * 定点定位一条评论：最新主体快照已含它时零请求返回它的根评论块；否则经适配器的
+   * `seekRoot` 一次取回（结果进 'page|…|seek|<id>' 页缓存，同一 id 再定位不再回源）。
+   * 评论不存在抛 `not-found`；平台不支持 seek 抛 `unavailable`。只算不存。
+   */
+  locateComment(
+    ref: SubjectRef,
+    commentId: string,
+    onProgress: (progress: CrawlProgress) => void,
+    signal: AbortSignal,
+  ): Promise<LocatedComment>;
   /** 历史快照，新到旧。 */
   history(): Promise<SnapshotSummary[]>;
   /** 打开历史快照并重算报告（不发请求）。 */

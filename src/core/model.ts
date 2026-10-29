@@ -89,6 +89,13 @@ export type Target =
    */
   | { kind: 'thread'; subject: SubjectRef; commentId: string };
 
+/**
+ * 顶层评论的排序维度。
+ * - `time`：按时间遍历，平台保证可遍历完整（B 站 wbi/main mode=2）；
+ * - `hot`：平台热度排序（B 站 mode=3），分页是页码式游标，顺序与可遍历性由平台说了算。
+ */
+export type RootOrder = 'time' | 'hot';
+
 /** 不透明游标，由适配器定义，必须可 JSON 序列化。 */
 export type Cursor = string;
 

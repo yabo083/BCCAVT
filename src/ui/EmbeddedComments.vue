@@ -79,6 +79,7 @@ import {
 } from '@/extension/page-comments';
 import type { ReaderTheme, UserCardRect } from '@/extension/page-comments';
 import type { Comment, Subject, SubjectRef } from '@/core/model';
+import { PlatformError } from '@/core/errors';
 import { buildForest } from '@/core/tree';
 import type {
   CommentNode,
@@ -162,6 +163,11 @@ const rowCap = ref(ROW_PAGE_SIZE);
 const stale = ref(false);
 /** 非取数类失败（展开回复 / 打开图谱 / 还原原生评论区）：与取数错误分开，走顶部状态条。 */
 const actionError = ref<string | null>(null);
+/**
+ * 定位块：「在评论区定位」到一条不在已读范围内的评论时，经 workbench.locateComment 定点取回
+ * 它的根评论块，钉在评论流上方（与原生置顶同款位置）。它不进流、不改流的行序（ADR-0004）。
+ */
+const located = shallowRef<{ root: Comment; comments: Comment[] } | null>(null);
 
 /**
  * 游标分页状态机：它自己不是响应式的，变化时换成一份状态快照存进 pagerState。
@@ -292,6 +298,16 @@ const listRows = computed<ThreadRow[]>(() => {
   return [...pinned.value, ...rows.value.slice(0, rowCap.value).filter((row) => !pinnedIds.has(row.id))];
 });
 const hiddenRows = computed(() => Math.max(0, rows.value.length - rowCap.value));
+/** 定位块自己的小森林：与主流同一份规则（buildForest + flattenThread + 同一折叠集）。 */
+const locatedForest = computed<Forest | null>(() => {
+  const block = located.value;
+  return block === null || block.comments.length === 0 ? null : buildForest([...block.comments]);
+});
+const locatedRows = computed<ThreadRow[]>(() => {
+  const block = located.value;
+  const node = block === null ? undefined : locatedForest.value?.byId.get(block.root.id);
+  return node === undefined ? [] : flattenThread(node, collapsed.value);
+});
 const title = computed(() => subject.value?.title ?? '');
 const commentCount = computed(() => pagerState.value.items.length);
 /**
@@ -558,6 +574,7 @@ async function resetTarget(): Promise<void> {
   replyTo.value = null;
   notice.value = null;
   actionError.value = null;
+  located.value = null;
   subject.value = null;
   identityLimitations.value = [];
   rowCap.value = ROW_PAGE_SIZE;
@@ -705,9 +722,15 @@ async function expandReplies(node: CommentNode): Promise<void> {
       new AbortController().signal,
     );
     if (input.value !== canonical) return; // 期间换过视频：这次结果不再属于当前视图
-    const next = new Map(loaded.value);
-    next.set(id, analysis.snapshot.comments);
-    loaded.value = next;
+    const block = located.value;
+    if (block !== null && locatedForest.value?.byId.has(id) === true && forest.value?.byId.has(id) !== true) {
+      // 定位块里的展开：取回的子树并进定位块，不进主流（流里没有它的根，并进去会变成孤儿行）
+      located.value = { ...block, comments: mergeComments(block.comments, analysis.snapshot.comments) };
+    } else {
+      const next = new Map(loaded.value);
+      next.set(id, analysis.snapshot.comments);
+      loaded.value = next;
+    }
     // 回复树落定即量一次：这些行多半还会继续长（图片/表情），ResizeObserver 只作补报
     await reportHeight();
   } catch (caught) {
@@ -719,12 +742,17 @@ async function expandReplies(node: CommentNode): Promise<void> {
   }
 }
 
+/** 行事件统一在这里找节点：定位块里的行不在主流森林里，两片森林都查。 */
+function nodeOf(id: string): CommentNode | null {
+  return forest.value?.byId.get(id) ?? locatedForest.value?.byId.get(id) ?? null;
+}
+
 function toggleFold(id: string): void {
   const next = new Set(collapsed.value);
   if (next.has(id)) {
     next.delete(id);
-    const node = forest.value?.byId.get(id);
-    if (node !== undefined) void expandReplies(node);
+    const node = nodeOf(id);
+    if (node !== null) void expandReplies(node);
   } else {
     next.add(id);
   }
@@ -773,7 +801,7 @@ watch(forest, (current) => {
 /* ── 写操作：点赞 / 回复 / 发表（意图经桥交给内容脚本，csrf 只在那边读） ── */
 
 function commentOf(id: string): Comment | null {
-  return forest.value?.byId.get(id)?.comment ?? null;
+  return nodeOf(id)?.comment ?? null;
 }
 
 /** 点赞 / 取消点赞：先乐观切换，失败回滚并提示。 */
@@ -834,6 +862,20 @@ async function submitComment(target: Comment | null, text: string): Promise<void
     await refreshLoadedPages('incremental');
     return;
   }
+  const block = located.value;
+  if (
+    target !== null &&
+    block !== null &&
+    locatedForest.value?.byId.has(target.id) === true &&
+    forest.value?.byId.has(target.id) !== true
+  ) {
+    // 在定位块里回复：新评论并进定位块，不进主流（流里没有它的根，并进去会变孤儿行）
+    located.value = { ...block, comments: mergeComments(block.comments, [created]) };
+    selectedId.value = created.id;
+    await scrollFlashRow(created.id);
+    void reportHeight();
+    return;
+  }
   added.value = [...added.value, created];
   await revealWritten(created);
 }
@@ -891,8 +933,7 @@ async function openGraph(): Promise<void> {
 
 /**
  * 第一页落定后补执行一次挂起的定位请求（见 `pendingLocate`）。
- * 只在真有数据之后放行：找不到就由 locateComment 给一句「不在已读范围内」——目标深在后面的页里时，
- * 实话实说比无限等待好：阅读器只跟着用户的滚动取页，不会为一次定位把整个视频拉下来。
+ * 只在真有数据之后放行：在流里就走原路，不在流里就由 locateComment 发一次定点定位。
  */
 function flushPendingLocate(): void {
   const id = pendingLocate;
@@ -902,36 +943,13 @@ function flushPendingLocate(): void {
 }
 
 /**
- * 定位到某条评论（工作台 / 图谱 →「在评论区定位」）：宿主把评论 id 投进来。
- *
- * 三步缺一不可：①目标可能被某个祖先的折叠藏起来 → 先展开从根到它的整条祖先链；
- * ②大树是分批铺的，它可能落在渲染上限之外 → 把上限抬到它那一行；③渲染出来才谈得上滚动与闪烁。
- * 不在已读范围内就照实说：凭空造一行是撒谎，悄悄滚到别的行更糟。
+ * 让某条评论行滚到视野中央并闪一下：先等 Vue 的 patch 落定（选中态是 class 绑定，
+ * 下一次 patch 会**重写整个 class 属性**，顺手把刚挂上的闪烁类抹掉），再按 data-comment-id
+ * 线性找行元素（行元素不写 id：平台 id 不一定能直进食选择器）——只发生在一次定位动作里。
+ * 同一个类连加两次不重放动画：先摘 → 强制重排 → 再加。
  */
-async function locateComment(commentId: string): Promise<void> {
-  // 一页都还没落定：没有数据可查，先挂起（内容脚本补发定位的时机就在 READER_READY 之后）
-  if (pagerState.value.items.length === 0) {
-    pendingLocate = commentId;
-    return;
-  }
-  const node = forest.value?.byId.get(commentId) ?? null;
-  if (node === null) {
-    notice.value = { tone: 'info', text: '这条评论不在已读范围内——滚到底把它所在的那一页取回来后再试' };
-    return;
-  }
-  const unfolded = new Set(collapsed.value);
-  for (let up = node.parent; up !== null; up = up.parent) unfolded.delete(up.comment.id);
-  if (unfolded.size !== collapsed.value.size) collapsed.value = unfolded;
+async function scrollFlashRow(commentId: string): Promise<void> {
   await nextTick();
-  const index = rows.value.findIndex((row) => row.id === commentId);
-  // 走到这里 node 一定在森林里，rows 就是森林的展平；找不到只可能是其间换了目标
-  if (index < 0) return;
-  if (index + 1 > rowCap.value) rowCap.value = index + 1;
-  selectedId.value = commentId;
-  // 选中态是 class 绑定：Vue 下一次 patch 会**重写整个 class 属性**，顺手把刚挂上的闪烁类抹掉。
-  // 所以先让这次 patch 落定，再去挂闪烁类（同一个类连加两次不重放动画，摘掉 → 强制重排 → 再加）。
-  await nextTick();
-  // 行元素不写 id（平台 id 不一定能直进食选择器），按 data-comment-id 线性找：只发生在一次定位动作里
   const found = rootEl.value?.querySelectorAll<HTMLElement>('[data-comment-id]') ?? [];
   const row = Array.from(found).find((el) => el.dataset.commentId === commentId) ?? null;
   if (row === null) return;
@@ -939,8 +957,86 @@ async function locateComment(commentId: string): Promise<void> {
   row.classList.remove('flash-highlight');
   void row.offsetWidth;
   row.classList.add('flash-highlight');
+}
+
+/** 关掉定位块：结构性缩高（块从 DOM 里消失），允许向宿主上报更小的值。 */
+function closeLocated(): void {
+  located.value = null;
+  void reportHeight(true);
+}
+
+/**
+ * 流内定位路径（目标的评论在评论流里，或刚被并进流里）：三步缺一不可——
+ * ①目标可能被某个祖先的折叠藏起来 → 先展开从根到它的整条祖先链；
+ * ②大树是分批铺的，它可能落在渲染上限之外 → 把上限抬到它那一行；③渲染出来才滚动与闪烁。
+ */
+async function locateInStream(commentId: string): Promise<void> {
+  const node = forest.value?.byId.get(commentId) ?? null;
+  if (node === null) return; // 理论上不会走到：进来前都查过森林；真走了只可能是其间换了目标
+  const unfolded = new Set(collapsed.value);
+  for (let up = node.parent; up !== null; up = up.parent) unfolded.delete(up.comment.id);
+  if (unfolded.size !== collapsed.value.size) collapsed.value = unfolded;
+  await nextTick();
+  const index = rows.value.findIndex((row) => row.id === commentId);
+  if (index < 0) return;
+  if (index + 1 > rowCap.value) rowCap.value = index + 1;
+  selectedId.value = commentId;
+  await scrollFlashRow(commentId);
   // 展开折叠、抬渲染上限都只会让内容变高，所以走「只增不减」这条（绝不借机往宿主报更矮的槽位）
   void reportHeight();
+}
+
+/**
+ * 定位到某条评论（工作台 / 图谱 →「在评论区定位」）：宿主把评论 id 投进来。
+ *
+ * 已在评论流里：走 `locateInStream` 原路径。不在已读范围内：经 workbench.locateComment
+ * 定点取回（快照已含则零请求，否则一次 seek）——取回的**根**若已经在流里（目标只是
+ * 一条还没加载的楼中楼），把评论块并进主流再按流内路径定位，不钉定位块；根也不在流里
+ * 才钉定位块。评论不存在就照实说。
+ */
+async function locateComment(commentId: string): Promise<void> {
+  // 一页都还没落定：没有数据可查，先挂起（内容脚本补发定位的时机就在 READER_READY 之后）
+  if (pagerState.value.items.length === 0) {
+    pendingLocate = commentId;
+    return;
+  }
+  if (forest.value?.byId.has(commentId) === true) {
+    await locateInStream(commentId);
+    return;
+  }
+  const canonical = input.value;
+  if (canonical === null || stale.value) return;
+  const resolved = readerWorkbench.resolve(canonical);
+  if (resolved === null) return;
+  try {
+    const found = await readerWorkbench.locateComment(
+      resolved.target.subject,
+      commentId,
+      () => {},
+      new AbortController().signal,
+    );
+    if (input.value !== canonical) return; // 期间换过视频：这次结果不再属于当前视图
+    if (forest.value?.byId.has(found.root.id) === true) {
+      // 目标的根已经在流里：评论块并进它的「按需回复」位（与 expandReplies 同一个 merged 通道），
+      // 不丢已加载的回复，然后按流内路径定位——定位块只留给「根也不在流里」的情况
+      const mergedLoaded = new Map(loaded.value);
+      mergedLoaded.set(found.root.id, mergeComments(mergedLoaded.get(found.root.id) ?? [], found.comments));
+      loaded.value = mergedLoaded;
+      await nextTick();
+      await locateInStream(commentId);
+      return;
+    }
+    located.value = { root: found.root, comments: found.comments };
+    selectedId.value = commentId;
+    await scrollFlashRow(commentId);
+    // 定位块只让内容变高，走「只增不减」这条
+    void reportHeight();
+  } catch (caught) {
+    notice.value =
+      caught instanceof PlatformError && caught.kind === 'not-found'
+        ? { tone: 'info', text: '这条评论不存在或已被删除' }
+        : { tone: 'error', text: failMessage(caught, '定位这条评论失败，请重试') };
+  }
 }
 
 /**
@@ -1129,6 +1225,35 @@ onBeforeUnmount(() => {
       @submit="submitComment(null, $event)"
     />
 
+    <!-- 定位块：「在评论区定位」到未读评论时钉在评论流上方，流的行序不受影响 -->
+    <section v-if="locatedRows.length > 0" class="located-block">
+      <div class="located-head row">
+        <span class="located-title small">定位到的评论</span>
+        <span class="grow" />
+        <button type="button" class="btn btn-sm btn-icon" title="关闭定位" aria-label="关闭定位" @click="closeLocated">
+          <IconX />
+        </button>
+      </div>
+      <PageCommentRow
+        v-for="row in locatedRows"
+        :key="`located-${row.id}`"
+        :row="row"
+        :like="likeStateOf(row)"
+        :reply="row.id === replyTo ? replyStateOf(row.id) : null"
+        :selected="row.id === selectedId"
+        :busy="expanding.has(row.id)"
+        @select="selectedId = $event"
+        @fold="toggleFold"
+        @analyze="selectedId = $event; openGraph()"
+        @user-card="onUserCard"
+        @toggle-like="toggleLike"
+        @open-reply="openReply"
+        @close-reply="closeReply"
+        @reply-input="setDraft"
+        @submit-reply="submitReply"
+      />
+    </section>
+
     <div v-if="hasItems" class="comment-list">
       <div class="list-head row">
         <h2 class="list-title">评论</h2>
@@ -1260,6 +1385,27 @@ onBeforeUnmount(() => {
   flex-direction: column;
   min-width: 0;
   background: transparent;
+}
+
+/* 定位块：与原生置顶同款位置（流上方），细边与底色把它和主流分开。 */
+.located-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.located-head {
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.located-title {
+  font-weight: 600;
+  color: var(--fg-muted);
 }
 
 /* 列表题头:「评论 312」——B 站评论区的第一行。 */

@@ -9,6 +9,13 @@ export interface CreateCacheOptions {
   /** 磁盘层字节预算；<= 0 表示不淘汰。 */
   diskBudgetBytes?: number;
   now?: () => number;
+  /**
+   * 跨文档单飞用的 Web Locks（默认 `navigator.locks`）。
+   * 扩展源 iframe 与顶层扩展页共享同一份 IndexedDB **和**同一份锁空间（实测 Chrome 156），
+   * 因此多个文档对同一键的并发 getOrLoad 由锁串行化：拿到锁后先复读一次，
+   * 另一个文档刚写完的值直接命中，loader 只跑一次。传 `null` 关闭（行为退化为仅本文档单飞）。
+   */
+  locks?: Pick<LockManager, 'request'> | null;
 }
 
 const SCHEMA_PREFIX = `v${CACHE_SCHEMA}|`;
@@ -23,6 +30,7 @@ export function createCache(options: CreateCacheOptions = {}): Cache {
   const memory = new MemoryLru(options.memoryEntries ?? 500);
   const disk = new DiskStore(options.dbName ?? 'loupe');
   const budget = options.diskBudgetBytes ?? 200 * 1024 * 1024;
+  const locks = options.locks === undefined ? (globalThis.navigator?.locks ?? null) : options.locks;
   const stats: CacheStats = {
     memory: { hits: 0, misses: 0 },
     disk: { hits: 0, misses: 0 },
@@ -137,10 +145,33 @@ export function createCache(options: CreateCacheOptions = {}): Cache {
       }
 
       const task = (async (): Promise<LoadResult<T>> => {
-        stats.loads++;
-        const value = await loader();
-        await cache.set(key, value, freshness);
-        return { value, source: 'network', storedAt: now() };
+        const load = async (): Promise<LoadResult<T>> => {
+          stats.loads++;
+          const value = await loader();
+          await cache.set(key, value, freshness);
+          return { value, source: 'network', storedAt: now() };
+        };
+        if (locks === null) return load();
+        // 跨文档单飞：拿到锁再复读一次——等待期间另一个文档可能已把值写进磁盘，
+        // 此时直接按普通磁盘命中返回，loader 全链路只跑一次。
+        let reachedLoader = false;
+        try {
+          return await locks.request(`loupe-cache|${key}`, async () => {
+            if (loadOptions?.force !== true) {
+              const hit = await read<T>(key);
+              if (hit !== undefined) {
+                return { value: hit.entry.value, source: hit.source, storedAt: hit.entry.storedAt };
+              }
+            }
+            reachedLoader = true;
+            return load();
+          });
+        } catch (error) {
+          // loader 自身的抛错必须原样透传；只有锁设施拿不到锁才降级为无锁回源。
+          if (reachedLoader) throw error;
+          stats.degraded++;
+          return load();
+        }
       })();
       inflight.set(key, task as Promise<LoadResult<unknown>>);
       try {

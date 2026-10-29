@@ -130,6 +130,43 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     ]);
   });
 
+  it('排序维度透传给适配器，缺省为 time', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })]]);
+    const workbench = build(adapter);
+
+    await workbench.previewRootsPage(adapter.subject.ref, null, options(), noop, signal());
+    expect(adapter.rootOrders).toEqual(['time']);
+
+    await workbench.previewRootsPage(adapter.subject.ref, null, options({ order: 'hot' }), noop, signal());
+    expect(adapter.rootOrders).toEqual(['time', 'hot']);
+  });
+
+  it('time 与 hot 的页缓存各自成链：不同序同一游标不共吃一条缓存', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })]]);
+    const workbench = build(adapter);
+
+    await workbench.previewRootsPage(adapter.subject.ref, null, options(), noop, signal());
+    expect(adapter.calls.roots).toBe(1);
+
+    // hot 序的同游标页是另一条键：必须回源，不能吃 time 序刚写下的页
+    await workbench.previewRootsPage(adapter.subject.ref, null, options({ order: 'hot' }), noop, signal());
+    expect(adapter.calls.roots).toBe(2);
+
+    // 回到 time 序：命中第一次写下的缓存，不再回源
+    await workbench.previewRootsPage(adapter.subject.ref, null, options(), noop, signal());
+    expect(adapter.calls.roots).toBe(2);
+  });
+
+  it('未知的排序值在公开入口被拒绝', async () => {
+    const adapter = new FakeAdapter();
+    const workbench = build(adapter);
+    await expect(
+      workbench.previewRootsPage(adapter.subject.ref, null, options({ order: 'newest' as never }), noop, signal()),
+    ).rejects.toMatchObject({ kind: 'invalid-input' });
+  });
+
   it('逐页取数不写快照与历史（只算不存）', async () => {
     const adapter = new FakeAdapter();
     adapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })]]);

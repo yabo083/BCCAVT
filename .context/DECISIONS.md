@@ -15,6 +15,7 @@
 | [0006](../docs/adr/0006-reader-spine-geometry.md) | 阅读器视觉体系 | 连接线锚在头像几何中心（`Xc(col) = --indent-base + col × --step + --slot-center`），脊线由 `flattenThread` 输出、视觉列封顶 3；放弃行级悬停高亮线色与分支 grid 折叠抽屉 | accepted |
 | [0007](../docs/adr/0007-theme-palette-tokens.md) | 可插拔配色 | 配色与明暗正交，只覆盖 accent 系五个令牌；5 套预设走 `data-palette` 属性选择器，自定义走内联变量，存 `loupe.palette`；放弃 `light-dark()`（Chrome 116 下限） | accepted |
 | [0008](../docs/adr/0008-locate-in-reader.md) | 评论区定位协议 | 工作台/图谱 → 后台按视频身份挑标签页 → 内容脚本转发 → 阅读器展开折叠/抬渲染上限/滚动闪烁；不在已读范围就照实提示 | accepted |
+| [0009](../docs/adr/0009-located-comment-pinned-block.md) | 定位未读评论 | `locateComment` = 快照查找 + `seek_rpid` 定点取回；结果钉在流上方成定位块，流序不动（守 ADR-0004）；放弃插入流/notice-only/开图谱窗 | accepted |
 
 ## 尚未写成 ADR 的取舍（触发条件出现再补）
 

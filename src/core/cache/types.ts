@@ -30,7 +30,7 @@ export const FRESHNESS_TTL_MS: Record<Freshness, number | null> = {
 };
 
 /** 递增即令全部旧条目失效（序列化契约变更时）。 */
-export const CACHE_SCHEMA = 2;
+export const CACHE_SCHEMA = 3;
 
 export interface CacheEntry<T> {
   key: string;

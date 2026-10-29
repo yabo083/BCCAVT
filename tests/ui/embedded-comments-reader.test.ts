@@ -35,7 +35,7 @@ const ROW_HEIGHT = 100;
 /** 展开一棵大树时的回复条数：要远超一批（`ROW_PAGE_SIZE`），才能观察到「到底之后还要不要手动点」。 */
 const BIG_REPLIES = 250;
 
-const mocks = vi.hoisted(() => ({ previewRootsPage: vi.fn(), previewThread: vi.fn(), contextUrl: '' }));
+const mocks = vi.hoisted(() => ({ previewRootsPage: vi.fn(), previewThread: vi.fn(), locateComment: vi.fn(), contextUrl: '' }));
 
 vi.mock('@/ui/services', () => ({
   ensureHeaderRules: async () => {},
@@ -48,6 +48,7 @@ vi.mock('@/ui/services', () => ({
     },
     previewRootsPage: mocks.previewRootsPage,
     previewThread: mocks.previewThread,
+    locateComment: mocks.locateComment,
   },
 }));
 
@@ -283,6 +284,7 @@ beforeEach(() => {
     },
   );
   mocks.previewThread.mockResolvedValue({});
+  mocks.locateComment.mockReset();
 });
 
 afterEach(() => {
@@ -803,16 +805,92 @@ describe('工作台 / 图谱 → 评论区定位', () => {
     expect(classes).toContain('flash-highlight');
   });
 
-  it('定位不在已读范围内的评论：不造行，照实提示', async () => {
+  it('定位不在已读范围内的评论：取回它的根评论块钉在流上方，流序不动', async () => {
+    const locatedRoot = makeComment({ id: '999990', text: '定位根', replyCount: 1 });
+    const locatedReply = makeComment({ id: '999991', rootId: '999990', parentId: '999990', text: '定位楼中楼' });
+    mocks.locateComment.mockResolvedValue({
+      subject: SUBJECT_META,
+      root: locatedRoot,
+      comments: [locatedRoot, locatedReply],
+      source: 'network',
+    });
+    planPages([{ cursor: null, comments: [ROOT, SECOND], next: null }]);
+    const wrapper = await open();
+
+    deliverLocate('999991');
+    await settle();
+
+    expect(mocks.locateComment).toHaveBeenCalledTimes(1);
+    // 定位块出现在流上方：目标行选中并闪烁，主流的行序一个都不动
+    const block = wrapper.get('.located-block');
+    expect(block.text()).toContain('定位到的评论');
+    const blockRows = block.findAll('article.comment-row');
+    expect(blockRows).toHaveLength(2);
+    const target = blockRows.find((row) => row.attributes('data-comment-id') === '999991')!;
+    expect(target.classes()).toContain('selected');
+    expect(target.classes()).toContain('flash-highlight');
+    expect(rowKinds(wrapper).slice(-2)).toEqual(['顶层一', '顶层二']);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+
+    // 关掉定位块：结构性缩高（允许上报更小的值）
+    const before = postedHeights();
+    await block.get('button[title="关闭定位"]').trigger('click');
+    await settle();
+    expect(wrapper.find('.located-block').exists()).toBe(false);
+    expect(postedHeights().at(-1)!).toBeLessThan(before.at(-1)!);
+  });
+
+  it('目标的根已在流里：评论块并进该根的回复，不钉定位块，流序不变', async () => {
+    // ROOT 在流里但楼中楼 c9 还没加载：seek 取回的是「ROOT 根评论块」
+    const c9 = makeComment({ id: '99', rootId: '1', parentId: '1', text: '定位的楼中楼' });
+    mocks.locateComment.mockResolvedValue({
+      subject: SUBJECT_META,
+      root: ROOT,
+      comments: [ROOT, REPLY, c9],
+      source: 'network',
+    });
+    planPages([{ cursor: null, comments: [ROOT, SECOND], next: null }]);
+    const wrapper = await open();
+
+    deliverLocate('99');
+    await settle();
+
+    expect(mocks.locateComment).toHaveBeenCalledTimes(1);
+    // 不钉定位块：c9 作为 ROOT 的楼中楼出现在主流里并被选中，流顶层顺序不动
+    expect(wrapper.find('.located-block').exists()).toBe(false);
+    const row = wrapper
+      .findAll('article.comment-row')
+      .find((el) => el.attributes('data-comment-id') === '99')!;
+    expect(row.classes()).toContain('selected');
+    expect(row.classes()).toContain('flash-highlight');
+    // c9 作为 ROOT 的楼中楼出现在主流里，顶层顺序（1 → 2）不变
+    expect(wrapper.findAll('article.comment-row').map((el) => el.attributes('data-comment-id'))).toEqual(['1', '11', '99', '2']);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+  });
+
+  it('定位在流里的评论不走 seek：仍用原路径（不发 locateComment）', async () => {
+    planPages([{ cursor: null, comments: [ROOT, REPLY], next: null }]);
+    const wrapper = await open();
+
+    deliverLocate('11');
+    await settle();
+
+    expect(mocks.locateComment).not.toHaveBeenCalled();
+    expect(wrapper.find('.located-block').exists()).toBe(false);
+  });
+
+  it('定位的评论不存在：不发 locateComment 时才提示；seek 返回 not-found 照实说', async () => {
+    const { PlatformError } = await import('@/core/errors');
+    mocks.locateComment.mockRejectedValue(new PlatformError('not-found', '评论不存在或已删除'));
     planPages([{ cursor: null, comments: [ROOT], next: null }]);
     const wrapper = await open();
 
     deliverLocate('999999');
     await settle();
 
-    expect(wrapper.text()).toContain('不在已读范围');
+    expect(wrapper.text()).toContain('这条评论不存在或已被删除');
+    expect(wrapper.find('.located-block').exists()).toBe(false);
     expect(wrapper.findAll('.comment-row')).toHaveLength(1);
-    expect(scrollSpy).not.toHaveBeenCalled();
   });
 
   it('首屏落定前到的定位：挂起，第一页到了再执行', async () => {

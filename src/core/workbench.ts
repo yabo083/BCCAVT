@@ -5,13 +5,14 @@ import { CrawlRunner, PoliteQueue, crawlRootsPage, crawlSubject, crawlThreadPage
 import { PlatformError } from './errors';
 import { subjectKey, targetKey } from './model';
 import type { Comment, Cursor, PlatformId, Session, SubjectRef, Target } from './model';
-import type { HttpClient, PlatformAdapter } from './platform';
+import type { HttpClient, PlatformAdapter, SeekResult } from './platform';
 import { SNAPSHOT_SCHEMA } from './report';
 import type {
   AnalysisResult,
   CrawlOptions,
   CrawlProgress,
   Forest,
+  LocatedComment,
   RootsPage,
   Snapshot,
   SnapshotSummary,
@@ -59,6 +60,9 @@ function validateCrawlOptions(options: CrawlOptions): void {
   if (options.refresh !== 'cache-first' && options.refresh !== 'incremental' && options.refresh !== 'full') {
     throw new PlatformError('invalid-input', `未知的刷新方式：${String(options.refresh)}`);
   }
+  if (options.order !== undefined && options.order !== 'time' && options.order !== 'hot') {
+    throw new PlatformError('invalid-input', `未知的顶层排序：${String(options.order)}`);
+  }
 }
 
 /** 从整棵评论树里取出「选中评论 + 其后代」；找不到选中评论返回 null。provenance 原样保留。 */
@@ -80,6 +84,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? defaultSleep;
   const { adapters, cache, http } = deps;
+  /**
+   * 本工作台的身份姿态（'direct' / 'page'……），**每次用到时现取**而不是构造时定死：
+   * readerHttp 的身份是个活的 getter（桥挂掉会从 'page' 翻成 'direct'），session 与登录态
+   * nav 这类「与身份绑定的数据」必须按当下身份建键——同一份物理缓存下两种姿态各读各的
+   * session，桥倒了之后也不能继续吃桥活着时写下的那份。
+   */
+  const identityNow = (): string => http.identity ?? 'direct';
 
   function adapterFor(platform: PlatformId): PlatformAdapter {
     const adapter = adapters.find((candidate) => candidate.id === platform);
@@ -114,7 +125,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   async function loadSession(runner: CrawlRunner): Promise<Session> {
     runner.setPhase('session');
-    return runner.load(cacheKey('session', runner.adapter.id), 'session', (ctx) => runner.adapter.getSession(ctx));
+    return runner.load(cacheKey('session', runner.adapter.id, identityNow()), 'session', (ctx) => runner.adapter.getSession(ctx));
   }
 
   async function readLatest(target: Target): Promise<Snapshot | null> {
@@ -138,7 +149,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       (options.maxRepliesPerThread > 0 && options.maxRepliesPerThread <= caps.maxRepliesPerThread);
     if (!rootOk || !replyOk) return false;
     if (snapshot.auth === 'anonymous') {
-      const stored = await cache.get<Session>(cacheKey('session', snapshot.target.subject.platform));
+      const stored = await cache.get<Session>(cacheKey('session', snapshot.target.subject.platform, identityNow()));
       if (stored !== undefined && stored.value.loggedIn) return false;
     }
     return true;
@@ -341,6 +352,59 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     return page;
   }
 
+  /**
+   * 定点定位一条评论的实现，三段序：
+   * ①最新主体快照已含它——零请求，直接从快照里取它所在的根评论块；
+   * ②否则经适配器的 `seekRoot` 一次取回（走 'seek' 页缓存键，同一 id 再定位不再回源；
+   *   刻意不写成 'roots|start'——定位块不是第一页，混键会把假首页喂给分页）；
+   * ③适配器没有 seekRoot——按平台能力缺失抛 unavailable。同样只算不存。
+   */
+  async function runLocate(
+    ref: SubjectRef,
+    commentId: string,
+    onProgress: (progress: CrawlProgress) => void,
+    signal: AbortSignal,
+  ): Promise<LocatedComment> {
+    const adapter = adapterFor(ref.platform);
+    const runner = makeRunner(adapter, signal, onProgress);
+
+    const snapshot = await readLatest({ kind: 'subject', subject: ref });
+    if (snapshot !== null) {
+      const target = snapshot.comments.find((comment) => comment.id === commentId);
+      if (target !== undefined) {
+        const rootId = target.rootId ?? target.id;
+        const root = snapshot.comments.find((comment) => comment.id === rootId);
+        if (root !== undefined) {
+          runner.setPhase('done', { fetched: snapshot.comments.length });
+          return {
+            subject: snapshot.subject,
+            root,
+            comments: [root, ...snapshot.comments.filter((comment) => comment.rootId === root.id)],
+            source: 'snapshot',
+          };
+        }
+      }
+    }
+
+    if (adapter.seekRoot === undefined) {
+      throw new PlatformError('unavailable', `${adapter.name} 不支持按评论定位`, { platform: adapter.id });
+    }
+    const startedAt = now();
+    const session = await loadSession(runner);
+    const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
+    runner.setPhase('subject');
+    const subject = await runner.load(cacheKey('meta', subjectKey(ref)), 'meta', (ctx) => adapter.getSubject(ref, ctx));
+    const requestsBefore = runner.stats.requests;
+    const found = await runner.load<SeekResult>(
+      cacheKey('page', subjectKey(ref), account, 'seek', commentId),
+      'page',
+      (ctx) => adapter.seekRoot!(subject, commentId, ctx),
+    );
+    runner.stats.durationMs = now() - startedAt;
+    runner.setPhase('done', { fetched: found.items.length });
+    return { subject, root: found.root, comments: found.items, source: runner.stats.requests === requestsBefore ? 'cache' : 'network' };
+  }
+
   return {
     adapters,
 
@@ -357,7 +421,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       const runner = makeRunner(adapter, signal ?? new AbortController().signal, () => {});
       // 登录态必须即时反映：公开入口每次回源（仍走单飞合并并发），不吃 30 分钟的 session 缓存。
       runner.setPhase('session');
-      return runner.load(cacheKey('session', adapter.id), 'session', (ctx) => adapter.getSession(ctx), { force: true });
+      return runner.load(cacheKey('session', adapter.id, identityNow()), 'session', (ctx) => adapter.getSession(ctx), { force: true });
     },
 
     /** 整页 / 侧栏入口：结果落快照（历史与 cache-first 复用都依赖它）。 */
@@ -381,6 +445,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
     previewThread(ref, commentId, options, onProgress, signal) {
       return runThread(ref, commentId, options, onProgress, signal, false);
+    },
+
+    /** 定点定位：快照能答就不发请求，否则一次 seek（结果进 'seek' 页缓存键）。 */
+    locateComment(ref, commentId, onProgress, signal) {
+      return runLocate(ref, commentId, onProgress, signal);
     },
 
     async history(): Promise<SnapshotSummary[]> {

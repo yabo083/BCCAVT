@@ -20,7 +20,7 @@
 - 抓取动作：`startSubject / refreshSubject / startThread / openComment / openSnapshot / deleteSnapshot / clearCache / loadSession / openLoginPage`；取消：`cancelRun / cancelAi`
 - AI：`generateInsight / diagnoseThread`；偏好：`updateOptions(patch)`；意图：`applyIntent / consumeIntent / readStoredIntent`
 
-`services.ts`：`cache`、`http`、`workbench`、`ai`、`readerHttp`（`createReaderHttp({ fallback: http })`）、`readerWorkbench`（`createMemoryCache()`）；`ensureHeaderRules(): Promise<void>`，失败抛 `Error`。
+`services.ts`：`cache`、`http`、`workbench`、`ai`、`readerHttp`（`createReaderHttp({ fallback: http })`）、`readerWorkbench`（与工作台共用 `cache`——同一份 'loupe' IndexedDB；身份分键见 services.ts 注释）；`ensureHeaderRules(): Promise<void>`，失败抛 `Error`。
 
 `infinite-scroll.ts`
 - `interface CursorPage<T> { items: readonly T[]; next: string | null }`
@@ -50,7 +50,7 @@
 7. **已提交高度不缩**：`reportHeight(allowShrink)` 只在「确认变大」或结构性缩高事件（折叠切换、换目标/重置）时下调（EmbeddedComments.vue#reportHeight），否则宿主文档变矮 → 浏览器把 `scrollTop` 钳回（回弹根因，EmbeddedComments.vue#committedHeight）。
 8. **哨兵只是兜底**：跨源 iframe 里 `rootMargin` 被忽略、`rootBounds` 为 null，提前量用 `translateY(-LOAD_MORE_MARGIN)` 做进哨兵自身几何（EmbeddedComments.vue#sentinelEl），回调交付不稳定故视口通道必须可用（EmbeddedComments.vue#observeSentinel）。
 9. **读走桥、写只发意图**：iframe 是扩展源、直连带不上站点 Cookie（匿名约 315 条封顶），故读经 `READER_FETCH_REQUEST` 在页面上下文执行；只有「投递不出去/没回话」才降级直连，内容脚本照实回投的网络错误仍交给上游退避（reader-http.ts:11-19,117-126）。
-10. **阅读器缓存只在内存**：session 键没有账号维度，与工作台共用磁盘缓存会互相喂错身份；阅读器不落快照，故不丢已有行为（services.ts:20-31）。
+10. **阅读器与工作台共用物理缓存**：两个 `createCache` 实例指向同一 'loupe' IndexedDB（session/nav 键带身份姿态、页键带账号维度所以不互喂错身份）；跨文档同键单飞走 Web Locks（扩展源 iframe 与顶层扩展页共享同一份 IDB 与锁空间，2026-10-29 实测）（services.ts#readerWorkbench、`src/core/cache/index.ts#getOrLoad`）。
 11. **阅读器不做虚拟化**：长正文按自然高度完整呈现，大树靠「分批渲染 + 折叠」限流（thread.ts:63-64）；定高虚拟列表只给工作台的 `VirtualList` 用。
 12. **顶层顺序 = 取回顺序（渲染层只追加）**：平台按时间**倒序**分页（`api.ts#fetchRootPage` 的 `mode=2`），而 `tree.ts#buildForest` 按 `createdAt` **升序**排根——直接用 `forest.roots` 渲染会让每一页新行整块插到已读内容之上（视口不动、内容下移一页高，观感即「加载新评论被打回刚看过的位置」）。改为按 `mergeComments` 的取回顺序取 `forest.byId`（EmbeddedComments.vue#merged、EmbeddedComments.vue#roots），森林只负责层级；父评论缺失的孤儿按森林顺序补末尾。见 [ADR-0004](../../docs/adr/0004-reader-row-order-append-only.md)。
 13. **换目标才重置**：`READER_NAVIGATION` 由后台对**任何** `tabs.onUpdated.url` 变化发出（含站点自己的 `replaceState`），所以先按目标身份比对（EmbeddedComments.vue#identityOf）再决定是否 `resetTarget()`（EmbeddedComments.vue#onNavigation）；否则一次 URL 抖动就会丢掉全部已读页并把槽位高度打回 360px（宿主文档变矮 → `scrollTop` 被钳回）。见 ADR-0003 的 2026-10-14 补充。
@@ -62,7 +62,7 @@
 18. **连接线锚在头像几何中心，脊线由纯逻辑算好**：列中心 `Xc(k) = --indent-base + k × --step + --slot-center`（`--slot-center` = 头像槽半宽），竖脊/stem/elbow/capped 的每一条 `left` 都由它推导（`PageCommentRow.vue#comment-row`）；`flattenThread` 输出 `col`/`parentCol`/`rowSpines`，渲染层不再按深度猜「这根线到谁为止」。同辈非末位节点的 `parentCol` 必须穿透本行与它的全部后代——这正是旧版「悬空半截线/缺一条线」的根因。视觉列封顶 `MAX_VISUAL_DEPTH = 3`，封顶行（`col === parentCol`）不画 elbow、改画竖直连接段（`.line.capped`），深度语义由「第 N 层」提示补回。见 [ADR-0006](../../docs/adr/0006-reader-spine-geometry.md)。
 19. **动效走既有令牌，不新造一套**：`--ease-spring`/`--dur-micro/fast/dock` 已有；点赞弹簧、计数回弹（挂载首帧不播）、`row-flash` 定位闪烁、回复抽屉的 `grid-template-rows: 0fr → 1fr`（不测高）。**不做**楼中楼分支的 grid 折叠抽屉：阅读器是扁平分批列表，折叠 = 从行集里移除（ADR-0003/0004 的「只追加 + 已提交高度不缩」契约），把折叠中的子树留在 DOM 里会与高度上报和渲染上限打架，收益只有一个 260ms 的动画。回复抽屉同理：**壳常驻**（轨道过渡要有起止两端），**Composer 只在打开时挂载**（上千行各挂一个 textarea 是白付的内存）。
 20. **配色是与明暗正交的一条轴**：`data-palette` 属性选择器（5 套预设，浅色/系统深色/显式深色三个入口）+ 自定义走内联变量；只覆盖 accent 系五个令牌（`--accent`/`--accent-strong`/`--accent-bg`/`--accent-border`/`--selection-bg`），中性色阶与语义色不动。切换入口是共用组件 `components/PalettePicker.vue`（自己读写 `loupe.palette`，所以挂两处天然同步），挂在**工具栏设置弹窗**（`ConfigPopup.vue`，主入口）与工作台顶栏（`TopBar.vue`）；阅读器是另一个文档：挂载时应用一次 + `watchPalette` 跟随（实测设置弹窗/工作台里点色点，已打开的 B 站页阅读器即时换色，无需刷新）。见 [ADR-0007](../../docs/adr/0007-theme-palette-tokens.md)。
-21. **定位协议：三个 hop，定位语义在阅读器**：工作台/图谱 → 后台（按**视频身份**挑标签页、激活、转发；没有已打开的就写 `LOCATE_PENDING_KEY` 再新开）→ 内容脚本（校验身份、就绪前挂起、`READER_READY` 后补发）→ 阅读器 `EmbeddedComments.vue#locateComment`（展开祖先折叠 → 抬渲染上限 → `scrollIntoView` 居中 + `flash-highlight`）。**不在已读范围就照实提示**，不造行、不滚到别的行。行元素因此写上 `data-comment-id`（定位锚点）。闪烁类必须在 `await nextTick()` **之后**挂——行上的 `class` 是绑定，Vue 下一次 patch 会重写整个 class 属性，先挂会被抹掉。见 [ADR-0008](../../docs/adr/0008-locate-in-reader.md)。
+21. **定位协议：三个 hop，定位语义在阅读器**：工作台/图谱 → 后台（按**视频身份**挑标签页、激活、转发；没有已打开的就写 `LOCATE_PENDING_KEY` 再新开）→ 内容脚本（校验身份、就绪前挂起、`READER_READY` 后补发）→ 阅读器 `EmbeddedComments.vue#locateComment`（展开祖先折叠 → 抬渲染上限 → `scrollIntoView` 居中 + `flash-highlight`）。不在已读范围则经 `workbench.locateComment` 定点取回（`seek_rpid`），钉在流上方成**定位块**（不进流、不改流序，ADR-0009）；评论不存在才照实提示。行元素因此写上 `data-comment-id`（定位锚点）。闪烁类必须在 `await nextTick()` **之后**挂——行上的 `class` 是绑定，Vue 下一次 patch 会重写整个 class 属性，先挂会被抹掉。见 [ADR-0008](../../docs/adr/0008-locate-in-reader.md)。
 
 22. **原型视觉细节对齐（第二批，2026-10-14）**：UP 作者头像用 `--accent-bg`/`--accent-strong` 着色；正文「回复 @某人：」前缀由 `comment-text.ts#splitMention` 解析出 mention（正文去前缀、单独成 pill）——解析只发生在 `PageCommentRow` 的渲染这一处，`thread.ts#preview`／详情卡／AI 仍用原始文本；首屏加载用 `components/SkeletonRows.vue` + `base.css` 的 `.skeleton-shimmer-box`（高度低于真实首屏，卸载后由只增不减的 `reportHeight()` 兜底）；工作台四块浮岛错峰入场（`island-drop/slide-left/slide-right/rise`，0/50/90/120ms）+ 视图切换 `view-fade-in/slide-forward/slide-backward` + 详情卡换选重放 `detail-reveal`（凡重放都要摘类→强制重排→挂类）；图谱选中/聚焦节点画 `force-graph.ts#radarPing` 驱动的雷达波（只在有选中/聚焦时开 rAF，`prefers-reduced-motion` 画静态环）。**有意不做的两项**：阅读器内的筛选/排序条（排序会与 ADR-0004「行序 = 取回顺序」正面冲突，且阅读器只持有已滚过的那几页，客户端排序/过滤会重排或藏掉正在读的行；等价能力在工作台 `views/ExplorerView.vue` + `explore.ts`，那里数据是全量）——**用户 2026-10-14 已把「还原原生按最热｜最新排序」追加为独立目标**（见 `roadmap.md` 的「大模块更新」第 4 条：走服务端排序 / 只在数据集完整的视图里排，仍不做客户端重排）、楼中楼分支的 grid 折叠抽屉（ADR-0006 决策 6）。
 
@@ -133,7 +133,7 @@ flowchart TD
 - **行锚点 `data-comment-id`（2026-10-14 起有了）**：`PageCommentRow` 的根 `<article class="comment-row">` 现在带 `data-comment-id`，定位协议与外部探针都用它认行。在这之前它没有 DOM id，探针只能靠「行文本哈希」认行——行内文本一变（例如迟到的楼中楼结果改写了行内计数）会被误判成「出现新行」（真机实测出现过一次假 `insertedAbove=1`）。
 
 - **定位按「视频身份」投递，不认「你正看着的那一枚标签页」**：同一个视频开着多枚标签页时，后台按 URL 挑中的可能是另一枚（真机实测踩到：目标页毫无反应，因为消息投给了另一枚同 URL 的标签页）。工作台侧的按钮只在「结果属于 bilibili 视频」时出现；图谱窗口没有评论区语义，不出现。
-- **定位只认「已读到的评论」**：阅读器按滚动逐页取顶层评论，目标深在后面的页里时会提示「不在已读范围内——滚到底把它所在的那一页取回来后再试」（不做全量抓取，见 ADR-0003）。
+- **定位不限于已读评论**：在流里走原路径（展开祖先 + 抬渲染上限 + 滚动闪烁）；不在流里时一次 `seek_rpid` 取回它的根评论块——根已在流里就并进该根的回复位按流内路径定位，根也不在流里才钉在流上方成定位块（`EmbeddedComments.vue#locateComment`、workbench `locateComment`——快照已含则零请求），主流行序不变（ADR-0004/0009）。
 
 ## 相关
 - [ADR-0003 阅读器无限滚动契约](../../docs/adr/0003-reader-infinite-scroll.md)

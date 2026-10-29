@@ -16,7 +16,7 @@ const ANON_UPPER_MID = '486906719';
 
 function env(handler: (url: string) => unknown): { ctx: FetchContext; urls: string[] } {
   const { http, urls } = createStubHttp(handler);
-  return { ctx: { http, cache: createMemoryCache(), signal: new AbortController().signal }, urls };
+  return { ctx: { http, cache: createMemoryCache(), signal: new AbortController().signal, identity: 'direct' }, urls };
 }
 
 /** nav 走固定响应，其余交给用例自己的 handler。 */
@@ -178,7 +178,7 @@ describe('getSubject', () => {
 describe('listRoots', () => {
   it('匿名首页：根评论与内联预览都归一化，is_end 时 next 为 null', async () => {
     const { ctx, urls } = env(withNav(() => fixture('main-hot-anon.json')));
-    const page = await bilibiliAdapter.listRoots(videoSubject(), null, ctx);
+    const page = await bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx);
 
     expect(page.next).toBeNull();
     expect(page.items).toHaveLength(9);
@@ -216,11 +216,11 @@ describe('listRoots', () => {
       },
     };
     const { ctx, urls } = env(withNav(() => response));
-    const page = await bilibiliAdapter.listRoots(videoSubject(), null, ctx);
+    const page = await bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx);
     expect(page.items.map((comment) => comment.id)).toEqual(['7']);
     expect(page.next).toBe('CAEaADICCB4=');
 
-    const second = await bilibiliAdapter.listRoots(videoSubject(), page.next, ctx);
+    const second = await bilibiliAdapter.listRoots(videoSubject(), page.next, 'time', ctx);
     expect(second.next).toBe('CAEaADICCB4=');
     expect(new URL(urls[2]!).searchParams.get('pagination_str')).toBe('{"offset":"CAEaADICCB4="}');
   });
@@ -237,7 +237,7 @@ describe('listRoots', () => {
       },
     };
     const { ctx } = env(withNav(() => response));
-    const page = await bilibiliAdapter.listRoots(videoSubject(), null, ctx);
+    const page = await bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx);
     expect(page.items.map((comment) => comment.id)).toEqual(['7', '8']);
     expect(page.items[0]!.pinned).toBe(true);
     expect(page.items[1]!.pinned).toBeUndefined();
@@ -252,12 +252,12 @@ describe('listRoots', () => {
     [12345, 'protocol'],
   ])('错误码 %i → %s', async (code, kind) => {
     const { ctx } = env(withNav(() => ({ code, message: '平台原文' })));
-    await expect(bilibiliAdapter.listRoots(videoSubject(), null, ctx)).rejects.toMatchObject({ kind, code });
+    await expect(bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx)).rejects.toMatchObject({ kind, code });
   });
 
   it('响应缺少 cursor 时报 protocol', async () => {
     const { ctx } = env(withNav(() => ({ code: 0, message: 'OK', data: { replies: [], top_replies: [] } })));
-    await expect(bilibiliAdapter.listRoots(videoSubject(), null, ctx)).rejects.toMatchObject({ kind: 'protocol' });
+    await expect(bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx)).rejects.toMatchObject({ kind: 'protocol' });
   });
 
   it('评论字段异常时报 protocol 并指明字段', async () => {
@@ -272,7 +272,85 @@ describe('listRoots', () => {
       },
     };
     const { ctx } = env(withNav(() => response));
-    await expect(bilibiliAdapter.listRoots(videoSubject(), null, ctx)).rejects.toMatchObject({ kind: 'protocol' });
+    await expect(bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx)).rejects.toMatchObject({ kind: 'protocol' });
+  });
+});
+
+describe('listRoots 排序维度', () => {
+  const page = {
+    code: 0,
+    message: 'OK',
+    data: { cursor: { is_end: true, pagination_reply: {} }, replies: [rawReply({ rpid_str: '7' })], top_replies: [], upper: {} },
+  };
+
+  it('order=time → mode=2；order=hot → mode=3（都在签名串里）', async () => {
+    const { ctx, urls } = env(withNav(() => page));
+    await bilibiliAdapter.listRoots(videoSubject(), null, 'time', ctx);
+    await bilibiliAdapter.listRoots(videoSubject(), null, 'hot', ctx);
+
+    expect(new URL(urls[1]!).searchParams.get('mode')).toBe('2');
+    expect(new URL(urls[2]!).searchParams.get('mode')).toBe('3');
+    for (const url of urls.slice(1)) expectValidSignature(url);
+    for (const url of urls.slice(1)) expect(new URL(url).searchParams.get('seek_rpid')).toBeNull();
+  });
+});
+
+describe('seekRoot', () => {
+  /** 平台对 seek_rpid 的回应：目标的根评论置顶在 replies[0]，其余是正常第一页。 */
+  function seekResponse(rootId: string, previews: RawJson[] = []): RawJson {
+    return {
+      code: 0,
+      message: 'OK',
+      data: {
+        cursor: { is_end: false, pagination_reply: { next_offset: 'CAEaADICCB4=' } },
+        replies: [
+          rawReply({ rpid_str: rootId, root_str: '0', replies: previews, rcount: previews.length, count: previews.length }),
+          rawReply({ rpid_str: '999' }),
+        ],
+        top_replies: [],
+        upper: { mid: ANON_UPPER_MID },
+      },
+    };
+  }
+
+  it('签名串只在定位时带 seek_rpid，普通分页不带', async () => {
+    const { ctx, urls } = env(withNav(() => seekResponse('123')));
+    await bilibiliAdapter.seekRoot!(videoSubject(), '123', ctx);
+    const params = new URL(urls[1]!).searchParams;
+    expect(params.get('seek_rpid')).toBe('123');
+    expect(params.get('mode')).toBe('2');
+    expectValidSignature(urls[1]!);
+  });
+
+  it('目标本身是根评论：root 即该评论，items 含内联预览并去重', async () => {
+    const preview = rawReply({ rpid_str: '456', root_str: '123', parent_str: '123' });
+    const { ctx } = env(withNav(() => seekResponse('123', [preview])));
+    const found = await bilibiliAdapter.seekRoot!(videoSubject(), '123', ctx);
+    expect(found.root.id).toBe('123');
+    expect(found.items.map((comment) => comment.id)).toEqual(['123', '456']);
+  });
+
+  it('目标是楼中楼：它出现在根的 replies 预览里也算命中', async () => {
+    const preview = rawReply({ rpid_str: '456', root_str: '123', parent_str: '123' });
+    const { ctx } = env(withNav(() => seekResponse('123', [preview])));
+    const found = await bilibiliAdapter.seekRoot!(videoSubject(), '456', ctx);
+    expect(found.root.id).toBe('123');
+    expect(found.items.map((comment) => comment.id)).toEqual(['123', '456']);
+  });
+
+  it('replies[0] 与目标对不上 / replies 为空：not-found，绝不把别人的评论交回去', async () => {
+    const mismatch = env(withNav(() => seekResponse('321')));
+    await expect(bilibiliAdapter.seekRoot!(videoSubject(), '123', mismatch.ctx)).rejects.toMatchObject({
+      kind: 'not-found',
+      platform: 'bilibili',
+    });
+
+    const empty = env(withNav(() => ({
+      code: 0,
+      message: 'OK',
+      data: { cursor: { is_end: true, pagination_reply: {} }, replies: [], top_replies: [], upper: {} },
+    })));
+    await expect(bilibiliAdapter.seekRoot!(videoSubject(), '123', empty.ctx)).rejects.toMatchObject({ kind: 'not-found' });
   });
 });
 
