@@ -364,3 +364,30 @@ describe('dislikeComment / deleteComment 参数装配', () => {
     expect(Object.keys(post.params)).not.toContain('action');
   });
 });
+
+describe('blockUser / reportComment 参数装配', () => {
+  it('拉黑：POST /x/relation/modify，fid/act=5/re_src=15/csrf', async () => {
+    const { writes, stub } = env(ok());
+    await writes.blockUser({ userId: '486906719' }, { csrf: CSRF });
+    const post = stub.posts[0]!;
+    expect(post.url).toBe('https://api.bilibili.com/x/relation/modify');
+    expect(post.params).toEqual({ fid: '486906719', act: '5', re_src: '15', csrf: CSRF });
+    expect(stub.urls.every((u) => !u.includes(CSRF))).toBe(true);
+  });
+
+  it('举报引战：POST /x/v2/reply/report，reason=4，不带 content', async () => {
+    const { writes, stub } = env(ok());
+    await writes.reportComment({ subject: videoSubject(), commentId: ROOT_ID, reason: 4 }, { csrf: CSRF });
+    const post = stub.posts[0]!;
+    expect(post.url).toBe('https://api.bilibili.com/x/v2/reply/report');
+    expect(post.params).toEqual({ oid: String(OID), type: '1', rpid: ROOT_ID, reason: '4', csrf: CSRF });
+    expect('content' in post.params).toBe(false);
+  });
+
+  it('举报其他：reason=0 时带 content 备注', async () => {
+    const { writes, stub } = env(ok());
+    await writes.reportComment({ subject: videoSubject(), commentId: ROOT_ID, reason: 0, content: '补充说明' }, { csrf: CSRF });
+    expect(stub.posts[0]!.params['content']).toBe('补充说明');
+  });
+});
+

@@ -710,3 +710,20 @@ describe('可恢复抓取', () => {
     releaseFirst();
     await pending;
   });
+  it('游标重复的缓存页不再让 listed 无限增长：截断而非 Invalid array length', async () => {
+    const adapter = new FakeAdapter();
+    const pages = [
+      [makeComment({ id: 'r1', replyCount: 0 })],
+      [makeComment({ id: 'r2', replyCount: 0 })],
+    ];
+    // 第二页的 next 指回自己：复用缓存时这种畸形游标会让 for(;;) 永不终止
+    adapter.rootsProvider = (cursor) => {
+      if (cursor === null) return { items: pages[0]!, next: 'loop' };
+      return { items: pages[1]!, next: 'loop' };
+    };
+    const { workbench } = build(adapter);
+    const result = await workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
+    expect(result.snapshot.completeness.truncated).toBe(true);
+    expect(result.snapshot.completeness.reasons.join(' ')).toContain('游标');
+    expect(result.snapshot.comments.map((c) => c.id).sort()).toEqual(['r1', 'r2']);
+  });

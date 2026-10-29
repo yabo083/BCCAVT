@@ -14,12 +14,16 @@ import PalettePicker from './components/PalettePicker.vue';
 import { PAGE_COMMENTS_ENABLED_KEY, READER_DEFAULT_ORDER_KEY } from '@/extension/page-comments';
 
 const enabled = ref(false);
-const defaultHot = ref(true);
-async function onOrderToggle(event: Event): Promise<void> {
-  const next = (event.target as HTMLInputElement).checked;
-  const previous = defaultHot.value;
-  defaultHot.value = next;
-  if (!(await persist(READER_DEFAULT_ORDER_KEY, next ? 'hot' : 'time'))) defaultHot.value = previous;
+const defaultOrder = ref<'hot' | 'time'>('hot');
+async function onOrderPick(next: 'hot' | 'time'): Promise<void> {
+  if (next === defaultOrder.value) return;
+  const previous = defaultOrder.value;
+  defaultOrder.value = next;
+  if (!(await persist(READER_DEFAULT_ORDER_KEY, next))) defaultOrder.value = previous;
+}
+function onOrderKey(event: KeyboardEvent): void {
+  if (event.key === 'ArrowLeft') void onOrderPick('hot');
+  else if (event.key === 'ArrowRight') void onOrderPick('time');
 }
 /** 读盘完成前禁用控件，避免用默认值把用户真实设置覆盖掉。 */
 const ready = ref(false);
@@ -76,7 +80,7 @@ onMounted(async () => {
   try {
     const bag = await chrome.storage.local.get([PAGE_COMMENTS_ENABLED_KEY, READER_DEFAULT_ORDER_KEY]);
     enabled.value = bag[PAGE_COMMENTS_ENABLED_KEY] === true;
-    defaultHot.value = bag[READER_DEFAULT_ORDER_KEY] !== 'time';
+    defaultOrder.value = bag[READER_DEFAULT_ORDER_KEY] === 'time' ? 'time' : 'hot';
     ready.value = true;
     chrome.storage.onChanged.addListener(onStorageChanged);
   } catch (cause) {
@@ -111,13 +115,29 @@ onBeforeUnmount(() => chrome.storage.onChanged.removeListener(onStorageChanged))
         <span class="config-name">自绘评论区</span>
         <input class="switch" type="checkbox" :checked="enabled" :disabled="!ready || saving" @change="onToggle" />
       </label>
-      <label
-        class="config-row clickable"
-        title="自绘评论区打开时默认按最热排序（与原生一致）；关闭则默认按最新。只对下一次打开生效，评论区里的「最热 | 最新」切换不受影响"
-      >
-        <span class="config-name">评论区默认按最热</span>
-        <input class="switch" type="checkbox" :checked="defaultHot" :disabled="!ready || saving" @change="onOrderToggle" />
-      </label>
+      <div class="config-row" title="下次打开评论区时按哪种顺序取数">
+        <span class="config-name">评论区排序</span>
+        <span class="seg" role="radiogroup" aria-label="评论区排序" @keydown="onOrderKey">
+          <button
+            type="button"
+            class="seg-opt"
+            :class="{ active: defaultOrder === 'hot' }"
+            role="radio"
+            :aria-checked="defaultOrder === 'hot'"
+            :disabled="!ready || saving"
+            @click="onOrderPick('hot')"
+          >最热</button>
+          <button
+            type="button"
+            class="seg-opt"
+            :class="{ active: defaultOrder === 'time' }"
+            role="radio"
+            :aria-checked="defaultOrder === 'time'"
+            :disabled="!ready || saving"
+            @click="onOrderPick('time')"
+          >最新</button>
+        </span>
+      </div>
     </section>
 
     <section class="config-group" aria-label="外观">
@@ -194,6 +214,29 @@ onBeforeUnmount(() => chrome.storage.onChanged.removeListener(onStorageChanged))
 }
 
 /* 一行设置：左名右控件，两端对齐；行内 hover 提亮（沿 base.css 的 state layer 思路）。 */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.seg-opt {
+  padding: 2px 10px;
+  border: 0;
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.seg-opt.active {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+.seg-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .config-row {
   display: flex;
   align-items: center;

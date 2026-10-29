@@ -58,6 +58,8 @@ const emit = defineEmits<{
   'toggle-like': [id: string];
   'toggle-dislike': [id: string];
   'copy-link': [id: string];
+  'block-user': [mid: string];
+  'report-comment': [id: string, reason: number, content?: string];
   'delete-comment': [id: string];
   'open-reply': [id: string];
   'close-reply': [id: string];
@@ -77,6 +79,21 @@ const emit = defineEmits<{
 /** 更多菜单：复制链接 / 删除（仅自己的评论，两段确认）。外部点击 / Esc 关闭。 */
 const menuOpen = ref(false);
 const deleteArmed = ref(false);
+const blockArmed = ref(false);
+const reportOpen = ref(false);
+const reportReason = ref(4);
+const reportContent = ref('');
+const REPORT_REASONS: Array<{ code: number; label: string }> = [
+  { code: 4, label: '引战' },
+  { code: 1, label: '垃圾广告' },
+  { code: 7, label: '人身攻击' },
+  { code: 3, label: '刷屏' },
+  { code: 8, label: '内容不相关' },
+  { code: 9, label: '违法违规' },
+  { code: 12, label: '赌博诈骗' },
+  { code: 13, label: '传播不实信息' },
+  { code: 0, label: '其他' },
+];
 const menuAnchor = ref<HTMLElement | null>(null);
 const canDelete = computed(
   () => props.sessionUserId !== undefined && props.sessionUserId !== null && props.sessionUserId === comment.value.author.id,
@@ -84,6 +101,7 @@ const canDelete = computed(
 function closeMenu(): void {
   menuOpen.value = false;
   deleteArmed.value = false;
+  blockArmed.value = false;
 }
 function toggleMenu(): void {
   if (menuOpen.value) {
@@ -107,6 +125,28 @@ function copyLink(): void {
   closeMenu();
   emit('copy-link', props.row.id);
 }
+function copyBlock(): void {
+  if (!blockArmed.value) {
+    blockArmed.value = true;
+    return;
+  }
+  closeMenu();
+  emit('block-user', comment.value.author.id);
+}
+
+function openReport(): void {
+  closeMenu();
+  reportReason.value = 4;
+  reportContent.value = '';
+  reportOpen.value = true;
+}
+
+function submitReport(): void {
+  if (reportReason.value === 0 && reportContent.value.trim() === '') return;
+  emit('report-comment', props.row.id, reportReason.value, reportReason.value === 0 ? reportContent.value.trim() : undefined);
+  reportOpen.value = false;
+}
+
 function confirmDelete(): void {
   if (!deleteArmed.value) {
     deleteArmed.value = true;
@@ -330,7 +370,9 @@ function toggleReply(): void {
               <IconDotsThree />
             </button>
             <div v-if="menuOpen" class="more-menu" role="menu" @click.stop>
-              <button type="button" class="more-item" role="menuitem" @click.stop="copyLink">复制链接</button>
+              <button type="button" class="more-item" role="menuitem" @click.stop="copyLink">复制评论链接</button>
+              <button type="button" class="more-item" role="menuitem" @click.stop="copyBlock">{{ blockArmed ? '确认拉黑' : '加入黑名单' }}</button>
+              <button type="button" class="more-item" role="menuitem" @click.stop="openReport">举报</button>
               <button
                 v-if="canDelete"
                 type="button"
@@ -342,6 +384,28 @@ function toggleReply(): void {
               </button>
             </div>
           </span>
+          <Teleport to="body">
+            <div v-if="reportOpen" class="report-mask" @click.self="reportOpen = false">
+              <div class="report-dialog" role="dialog" aria-label="举报评论">
+                <div class="report-title">举报评论</div>
+                <label v-for="r in REPORT_REASONS" :key="r.code" class="report-opt">
+                  <input v-model.number="reportReason" type="radio" name="report-reason" :value="r.code" />
+                  <span>{{ r.label }}</span>
+                </label>
+                <input
+                  v-if="reportReason === 0"
+                  v-model="reportContent"
+                  class="report-content"
+                  type="text"
+                  placeholder="请补充说明（必填）"
+                />
+                <div class="report-btns">
+                  <button type="button" class="report-btn" @click="reportOpen = false">取消</button>
+                  <button type="button" class="report-btn primary" :disabled="reportReason === 0 && reportContent.trim() === ''" @click="submitReport">提交</button>
+                </div>
+              </div>
+            </div>
+          </Teleport>
           <button
             type="button"
             class="act analyze"
@@ -789,10 +853,12 @@ a.name:hover {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  min-width: 96px;
+  min-width: 112px;
   padding: var(--sp-1) 0;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop, 0 4px 16px rgb(0 0 0 / 0.12));
   background: var(--surface-1);
   box-shadow: var(--shadow-1, 0 4px 16px rgb(0 0 0 / 0.18));
 }
@@ -950,3 +1016,66 @@ a.name:hover {
   }
 }
 </style>
+
+.report-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.35);
+}
+.report-dialog {
+  width: 240px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, var(--r-sm));
+  background: var(--surface);
+  box-shadow: var(--shadow-pop, 0 8px 24px rgb(0 0 0 / 0.16));
+}
+.report-title {
+  margin-bottom: var(--sp-2);
+  font-weight: 600;
+}
+.report-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px 0;
+  cursor: pointer;
+}
+.report-content {
+  width: 100%;
+  margin-top: var(--sp-2);
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.report-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.report-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  cursor: pointer;
+}
+.report-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg-on-accent, #fff);
+}
+.report-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

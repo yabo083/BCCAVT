@@ -13,6 +13,7 @@ import { cacheKey } from '../../core/cache/types';
 import { PlatformError, type PlatformErrorKind } from '../../core/errors';
 import type { Author, Comment, RootOrder, Session, Subject, SubjectRef } from '../../core/model';
 import type {
+  BlockUserInput,
   DeleteCommentInput,
   DislikeCommentInput,
   FetchContext,
@@ -20,6 +21,7 @@ import type {
   LikeCommentInput,
   PlatformWrites,
   ReplyCommentInput,
+  ReportCommentInput,
   WriteAuth,
 } from '../../core/platform';
 import { arrField, asRecord, numField, optId, optNum, optionalRecord, optStr, strField, type RawObject } from './raw';
@@ -358,6 +360,27 @@ export function createBilibiliWrites(http: HttpClient): PlatformWrites {
       const csrf = requireCsrf(auth);
       const locator = locatorOf(input.subject);
       await postWrite(`${API_BASE}/x/v2/reply/del`, { oid: locator.oid, type: String(locator.type), rpid: input.commentId, csrf }, http);
+    },
+
+    /** 拉黑作者：POST /x/relation/modify act=5，re_src=15（评论区来源，见 docs/user/relation.md）。 */
+    async blockUser(input: BlockUserInput, auth: WriteAuth): Promise<void> {
+      const csrf = requireCsrf(auth);
+      await postWrite(`${API_BASE}/x/relation/modify`, { fid: input.userId, act: '5', re_src: '15', csrf }, http);
+    },
+
+    /** 举报评论：POST /x/v2/reply/report，reason=0（其他）时须带 content。 */
+    async reportComment(input: ReportCommentInput, auth: WriteAuth): Promise<void> {
+      const csrf = requireCsrf(auth);
+      const locator = locatorOf(input.subject);
+      const params: Record<string, string> = {
+        oid: locator.oid,
+        type: String(locator.type),
+        rpid: input.commentId,
+        reason: String(input.reason),
+        csrf,
+      };
+      if (input.reason === 0) params['content'] = input.content ?? '';
+      await postWrite(`${API_BASE}/x/v2/reply/report`, params, http);
     },
 
     /** 发表 / 回复：POST /x/v2/reply/add，成功返回归一化的新评论。 */

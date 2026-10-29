@@ -52,7 +52,7 @@
 9. **读走桥、写只发意图**：iframe 是扩展源、直连带不上站点 Cookie（匿名约 315 条封顶），故读经 `READER_FETCH_REQUEST` 在页面上下文执行；只有「投递不出去/没回话」才降级直连，内容脚本照实回投的网络错误仍交给上游退避（reader-http.ts:11-19,117-126）。
 9.5. **「最热 | 最新」切换 = 换数据集**：`order`（默认 `'hot'`，与原生一致）进 `CrawlOptions`，页键带 order 维度；`EmbeddedComments.vue#switchOrder` abort 旧序在途页 + `pager.reset()` + 从新序游标起点重取——绝不客户端重排（ADR-0004），来回切命中各自缓存。初始默认序读 `READER_DEFAULT_ORDER_KEY`（弹窗「评论区默认按最热」，只影响下一次加载）；行内切换不持久化。
 
-9.6. **行操作 = 意图上报**：点踩与点赞互斥（`EmbeddedComments.vue#toggleDislike`，踩赞过的评论先乐观撤赞，失败回滚）；`⋯` 菜单（`PageCommentRow.vue`）含「复制链接」（`${subject.url}#reply<id>`）与「删除」（仅 `sessionUserId` === 评论作者时显示，行内两段确认；成功后评论连同子树经 `removed` 集合从合流层剔除 + `reportHeight(true)`）。举报有意不做：原生要走原因对话框，超出本行操作范围。
+9.6. **行操作 = 意图上报**：点踩与点赞互斥（`EmbeddedComments.vue#toggleDislike`，踩赞过的评论先乐观撤赞，失败回滚）；`⋯` 菜单（`PageCommentRow.vue`）= 原生四项：「复制评论链接」（`${subject.url}#reply<id>`）、「加入黑名单」（两段确认，`blockIntent` → `x/relation/modify` act=5 re_src=15）、「举报」（行内不透明对话框选理由 0–17，reason=0 须填备注，`reportIntent` → `x/v2/reply/report`）、「删除」（仅 `sessionUserId` === 评论作者时显示，两段确认；成功后评论连同子树经 `removed` 集合从合流层剔除 + `reportHeight(true)`）。菜单面不透明（`--surface`/`--border`/shadow，无半透明或 backdrop-filter）。
 
 10. **阅读器与工作台共用物理缓存**：两个 `createCache` 实例指向同一 'loupe' IndexedDB（session/nav 键带身份姿态、页键带账号维度所以不互喂错身份）；跨文档同键单飞走 Web Locks（扩展源 iframe 与顶层扩展页共享同一份 IDB 与锁空间，2026-10-29 实测）（services.ts#readerWorkbench、`src/core/cache/index.ts#getOrLoad`）。
 11. **阅读器不做虚拟化**：长正文按自然高度完整呈现，大树靠「分批渲染 + 折叠」限流（thread.ts:63-64）；定高虚拟列表只给工作台的 `VirtualList` 用。

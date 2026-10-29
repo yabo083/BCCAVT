@@ -33,15 +33,16 @@ beforeEach(() => {
 });
 
 describe('配置弹窗', () => {
-  it('「评论区默认按最热」开关写 READER_DEFAULT_ORDER_KEY：关=time、开=hot', async () => {
+  it('「评论区排序」分段控件写 READER_DEFAULT_ORDER_KEY', async () => {
     const wrapper = mount(ConfigPopup, { global: { stubs: { PalettePicker: true } } });
     await new Promise((r) => setTimeout(r, 0));
-    const switches = wrapper.findAll('input.switch');
-    const orderSwitch = switches[switches.length - 1]!;
-    expect((orderSwitch.element as HTMLInputElement).checked).toBe(true);
-    await orderSwitch.setValue(false);
+    const seg = wrapper.findAll('.seg-opt');
+    expect(seg).toHaveLength(2);
+    expect(seg[0]!.attributes('aria-checked')).toBe('true');
+    expect(seg[1]!.attributes('aria-checked')).toBe('false');
+    await seg[1]!.trigger('click');
     expect(setCalls.at(-1)).toEqual({ [READER_DEFAULT_ORDER_KEY]: 'time' });
-    await orderSwitch.setValue(true);
+    await seg[0]!.trigger('click');
     expect(setCalls.at(-1)).toEqual({ [READER_DEFAULT_ORDER_KEY]: 'hot' });
     wrapper.unmount();
   });

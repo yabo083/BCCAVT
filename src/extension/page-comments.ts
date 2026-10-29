@@ -265,7 +265,7 @@ export const READER_WRITE_REQUEST = 'loupe:reader-write';
 export const READER_WRITE_RESULT = 'loupe:reader-write-result';
 
 /** 写意图：点赞、取消点赞、点踩、取消点踩、删除自己的评论、回复（不带 rootId/parentId 即发表新的顶层评论）。 */
-export type ReaderWriteOp = 'like' | 'unlike' | 'dislike' | 'undislike' | 'delete' | 'reply';
+export type ReaderWriteOp = 'like' | 'unlike' | 'dislike' | 'undislike' | 'delete' | 'reply' | 'block' | 'report';
 
 /**
  * 正文长度上限（与 B 站 `message` 上限一致，也用作输入框的 maxlength）。
@@ -289,6 +289,12 @@ export interface ReaderWriteRequest extends ReaderBridgeMessage {
   parentId?: string;
   /** reply：正文（顶层评论与楼中楼都必填）。 */
   text?: string;
+  /** block：被拉黑用户的 mid。 */
+  userId?: string;
+  /** report：举报类型代码（0-17），reason=0 时 content 必填。 */
+  reason?: number;
+  /** report：reason=0 时的其他备注。 */
+  content?: string;
 }
 
 export interface ReaderWriteResult extends ReaderBridgeMessage {
@@ -312,10 +318,16 @@ function isReaderRequestId(value: unknown): value is string {
  */
 export function isReaderWriteRequest(value: unknown): value is ReaderWriteRequest {
   if (!isReaderBridgeMessage(value, READER_WRITE_REQUEST)) return false;
-  const { requestId, op, commentId, rootId, parentId, text } = value as Partial<ReaderWriteRequest>;
+  const { requestId, op, commentId, rootId, parentId, text, userId, reason, content } = value as Partial<ReaderWriteRequest>;
   if (!isReaderRequestId(requestId)) return false;
   if (op === 'like' || op === 'unlike' || op === 'dislike' || op === 'undislike' || op === 'delete') {
-    return isCommentId(commentId) && rootId === undefined && parentId === undefined && text === undefined;
+    return isCommentId(commentId) && rootId === undefined && parentId === undefined && text === undefined && userId === undefined && reason === undefined && content === undefined;
+  }
+  if (op === 'block') {
+    return typeof userId === 'string' && /^\d+$/.test(userId) && commentId === undefined && rootId === undefined && parentId === undefined && text === undefined && reason === undefined && content === undefined;
+  }
+  if (op === 'report') {
+    return isCommentId(commentId) && typeof reason === 'number' && Number.isInteger(reason) && reason >= 0 && reason <= 17 && rootId === undefined && parentId === undefined && text === undefined && userId === undefined && (reason === 0 ? typeof content === 'string' && content.trim() !== '' : content === undefined);
   }
   if (op !== 'reply' || commentId !== undefined) return false;
   if ((rootId === undefined) !== (parentId === undefined)) return false;

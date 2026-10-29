@@ -51,6 +51,8 @@ class WriteFakeAdapter implements PlatformAdapter {
   readonly replyCalls: ReplyCommentInput[] = [];
   readonly dislikeCalls: DislikeCommentInput[] = [];
   readonly deleteCalls: DeleteCommentInput[] = [];
+  readonly blockCalls: string[] = [];
+  readonly reportCalls: Array<{ commentId: string; reason: number; content?: string }> = [];
   /** 写层收到的鉴权包：用来证明 csrf 是从 cookie 现读后原样传下去的。 */
   readonly auths: WriteAuth[] = [];
   subjectCalls = 0;
@@ -61,7 +63,9 @@ class WriteFakeAdapter implements PlatformAdapter {
           likeComment: async (input, auth) => this.runWrite(input, auth),
           dislikeComment: async (input, auth) => { this.auths.push(auth); this.dislikeCalls.push(input); const f = this.writeFailures.shift(); if (f) throw f; },
           deleteComment: async (input, auth) => { this.auths.push(auth); this.deleteCalls.push(input); const f = this.writeFailures.shift(); if (f) throw f; },
-          replyComment: async (input, auth) => {
+          blockUser: async (input, auth) => { this.auths.push(auth); this.blockCalls.push(input.userId); },
+    reportComment: async (input, auth) => { this.auths.push(auth); this.reportCalls.push({ commentId: input.commentId, reason: input.reason, content: input.content }); },
+    replyComment: async (input, auth) => {
             await this.runWrite(input, auth);
             return NEW_COMMENT;
           },
@@ -253,3 +257,27 @@ describe('点踩 / 删除', () => {
     expect(isReaderWriteRequest({ source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId: 'r', ...req })).toBe(ok);
   });
 });
+
+describe('block / report 桥与执行', () => {
+  it('isReaderWriteRequest 守卫：block 只要数字 userId，report 要 commentId+整数 reason，reason=0 须 content', () => {
+    const base = { source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId: 'r1' };
+    expect(isReaderWriteRequest({ ...base, op: 'block', userId: '486906719' })).toBe(true);
+    expect(isReaderWriteRequest({ ...base, op: 'block', userId: 'abc' })).toBe(false);
+    expect(isReaderWriteRequest({ ...base, op: 'report', commentId: '1', reason: 4 })).toBe(true);
+    expect(isReaderWriteRequest({ ...base, op: 'report', commentId: '1', reason: 0 })).toBe(false);
+    expect(isReaderWriteRequest({ ...base, op: 'report', commentId: '1', reason: 0, content: '补充' })).toBe(true);
+    expect(isReaderWriteRequest({ ...base, op: 'report', commentId: '1', reason: 18 })).toBe(false);
+  });
+
+  it('block 走 writes.blockUser 且只发一次；report 走 writes.reportComment 带 reason/content', async () => {
+    const adapter = new WriteFakeAdapter();
+    const exec = createReaderWriteExecutor(adapter);
+    const block = await exec({ source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId: 'b1', op: 'block', userId: '486906719' });
+    expect(block.ok).toBe(true);
+    expect(adapter.blockCalls).toEqual(['486906719']);
+    const report = await exec({ source: READER_BRIDGE_SOURCE, type: READER_WRITE_REQUEST, requestId: 'r1', op: 'report', commentId: '7', reason: 0, content: '备注' });
+    expect(report.ok).toBe(true);
+    expect(adapter.reportCalls).toEqual([{ commentId: '7', reason: 0, content: '备注' }]);
+  });
+});
+

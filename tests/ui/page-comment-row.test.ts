@@ -432,21 +432,46 @@ describe('点踩与更多菜单', () => {
     const busy = mountRow({ like: { count: 5, liked: false, disliked: false, busy: true } });
     expect(busy.get('.act.dislike').attributes('disabled')).toBeDefined();
   });
-  it('复制链接发 copy-link；删除只对作者本人显示且两段确认', async () => {
+  it('菜单项按归属显示：他人 3 项（复制链接/拉黑/举报），本人再加删除且两段确认', async () => {
     const other = mountRow({ row: makeRow() });
     await other.get('[aria-label="更多"]').trigger('click');
-    expect(other.findAll('.more-item')).toHaveLength(1);
+    expect(other.findAll('.more-item')).toHaveLength(3);
+    expect(other.text()).toContain('复制评论链接');
+    expect(other.text()).toContain('加入黑名单');
+    expect(other.text()).toContain('举报');
     const own = mountRow({ subjectUrl: 'https://www.bilibili.com/video/BV1x', sessionUserId: 'u1' });
     await own.get('[aria-label="更多"]').trigger('click');
     const items = own.findAll('.more-item');
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(4);
     await items[0]!.trigger('click');
     expect(own.emitted('copy-link')?.[0]).toEqual(['c1']);
     await own.get('[aria-label="更多"]').trigger('click');
-    await own.findAll('.more-item')[1]!.trigger('click');
+    await own.findAll('.more-item')[3]!.trigger('click');
     expect(own.emitted('delete-comment')).toBeUndefined();
     expect(own.text()).toContain('确认删除');
-    await own.findAll('.more-item')[1]!.trigger('click');
+    await own.findAll('.more-item')[3]!.trigger('click');
     expect(own.emitted('delete-comment')?.[0]).toEqual(['c1']);
+  });
+
+  it('加入黑名单两段确认后发 block-user（作者 mid）；举报开对话框并按理由发 report-comment', async () => {
+    const w = mountRow({ row: makeRow() });
+    await w.get('[aria-label="更多"]').trigger('click');
+    // 第一次只是武装
+    await w.findAll('.more-item')[1]!.trigger('click');
+    expect(w.emitted('block-user')).toBeUndefined();
+    expect(w.text()).toContain('确认拉黑');
+    await w.findAll('.more-item')[1]!.trigger('click');
+    expect(w.emitted('block-user')?.[0]).toEqual(['u1']);
+
+    await w.get('[aria-label="更多"]').trigger('click');
+    await w.findAll('.more-item')[2]!.trigger('click');
+    // 对话框经 Teleport 挂到 body：选「其他」→ 备注必填；默认「引战」→ 直接提交
+    const dialog = document.body.querySelector<HTMLElement>('.report-dialog');
+    expect(dialog?.textContent ?? '').toContain('举报评论');
+    const submit = dialog!.querySelector<HTMLButtonElement>('.report-btn.primary')!;
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.emitted('report-comment')?.[0]).toEqual(['c1', 4, undefined]);
   });
 });

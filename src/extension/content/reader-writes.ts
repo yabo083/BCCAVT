@@ -107,6 +107,17 @@ export function createReaderWriteExecutor(adapter: PlatformAdapter): ReaderWrite
         );
         return { ...base, ok: true, comment };
       }
+      if (request.op === 'block') {
+        await writes.blockUser({ userId: required(request.userId, 'userId') }, { csrf });
+        return { ...base, ok: true };
+      }
+      if (request.op === 'report') {
+        await writes.reportComment(
+          { subject, commentId: required(request.commentId, 'commentId'), reason: required(request.reason, 'reason'), content: request.content },
+          { csrf },
+        );
+        return { ...base, ok: true };
+      }
       const commentId = required(request.commentId, 'commentId');
       if (request.op === 'like' || request.op === 'unlike') {
         await writes.likeComment({ subject, commentId, action: request.op }, { csrf });

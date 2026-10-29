@@ -88,6 +88,18 @@ export interface DeleteCommentInput {
   commentId: string;
 }
 
+export interface BlockUserInput {
+  userId: string;
+}
+
+export interface ReportCommentInput {
+  subject: Subject;
+  commentId: string;
+  /** bilibili 举报类型代码 0-17（0=其他，须附 content）。 */
+  reason: number;
+  content?: string;
+}
+
 export interface ReplyCommentInput {
   /** 目标主体：同上。 */
   subject: Subject;
@@ -107,6 +119,10 @@ export interface PlatformWrites {
   dislikeComment(input: DislikeCommentInput, auth: WriteAuth): Promise<void>;
   /** 删除评论（只对自己的评论开放）。平台返回 code 0 即 resolve。 */
   deleteComment(input: DeleteCommentInput, auth: WriteAuth): Promise<void>;
+  /** 拉黑用户：relation/modify act=5。 */
+  blockUser(input: BlockUserInput, auth: WriteAuth): Promise<void>;
+  /** 举报评论：/x/v2/reply/report。 */
+  reportComment(input: ReportCommentInput, auth: WriteAuth): Promise<void>;
   /** 发表评论 / 回复，成功后返回归一化的新评论。 */
   replyComment(input: ReplyCommentInput, auth: WriteAuth): Promise<Comment>;
 }

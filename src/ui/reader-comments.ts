@@ -26,6 +26,9 @@ export interface WriteIntent {
   rootId?: string;
   parentId?: string;
   text?: string;
+  userId?: string;
+  reason?: number;
+  content?: string;
 }
 
 /** 评论行的点赞显示态：计数已含本次会话的乐观增量。 */
@@ -52,6 +55,16 @@ export function likeIntent(commentId: string, liked: boolean): WriteIntent {
 /** 点踩 / 取消点踩：disliked 是点击前的状态。 */
 export function dislikeIntent(commentId: string, disliked: boolean): WriteIntent {
   return { op: disliked ? 'undislike' : 'dislike', commentId };
+}
+
+/** 拉黑评论作者：两段确认在 UI 层做，意图携带作者 mid。 */
+export function blockIntent(userId: string): WriteIntent {
+  return { op: 'block', userId };
+}
+
+/** 举报评论：对话框选 reason（0=其他须带 content）。 */
+export function reportIntent(commentId: string, reason: number, content?: string): WriteIntent {
+  return { op: 'report', commentId, reason, content };
 }
 
 /** 删除自己的评论：两段确认在 UI 层做，意图本身只有评论 id。 */
@@ -102,6 +115,9 @@ export function buildWriteRequest(intent: WriteIntent, requestId: string): Reade
   if (intent.rootId !== undefined) request.rootId = intent.rootId;
   if (intent.parentId !== undefined) request.parentId = intent.parentId;
   if (intent.text !== undefined) request.text = intent.text;
+  if (intent.userId !== undefined) request.userId = intent.userId;
+  if (intent.reason !== undefined) request.reason = intent.reason;
+  if (intent.content !== undefined) request.content = intent.content;
   return request;
 }
 

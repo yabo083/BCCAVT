@@ -55,11 +55,13 @@ import {
   commentIntent,
   commentTextError,
   createWriteClient,
+  blockIntent,
   deleteIntent,
   dislikeIntent,
   likeIntent,
   mergeComments,
   replyIntent,
+  reportIntent,
 } from './reader-comments';
 import type { RowLikeState, RowReplyState } from './reader-comments';
 import {
@@ -997,6 +999,24 @@ async function deleteComment(id: string): Promise<void> {
   void reportHeight(true);
 }
 
+/** 拉黑作者：写链路在页面上下文执行 csrf；成功后仅提示（不隐藏行，与原生一致）。 */
+async function blockUser(mid: string): Promise<void> {
+  if (stale.value) return;
+  const outcome = await writes.send(blockIntent(mid));
+  notice.value = outcome.ok
+    ? { tone: 'info', text: '已加入黑名单' }
+    : { tone: 'error', text: outcome.error ?? '拉黑失败，请重试' };
+}
+
+/** 举报评论：理由与可选备注由行内对话框选好，桥送 op=report。 */
+async function reportComment(id: string, reason: number, content?: string): Promise<void> {
+  if (stale.value) return;
+  const outcome = await writes.send(reportIntent(id, reason, content));
+  notice.value = outcome.ok
+    ? { tone: 'info', text: '已提交举报' }
+    : { tone: 'error', text: outcome.error ?? '举报失败，请重试' };
+}
+
 function submitReply(id: string, text: string): void {
   const comment = commentOf(id);
   if (comment === null) return;
@@ -1370,6 +1390,8 @@ onBeforeUnmount(() => {
         @toggle-dislike="toggleDislike"
         @copy-link="copyCommentLink"
         @delete-comment="deleteComment"
+        @block-user="blockUser"
+        @report-comment="reportComment"
         @open-reply="openReply"
         @close-reply="closeReply"
         @reply-input="setDraft"
@@ -1407,6 +1429,8 @@ onBeforeUnmount(() => {
         @toggle-dislike="toggleDislike"
         @copy-link="copyCommentLink"
         @delete-comment="deleteComment"
+        @block-user="blockUser"
+        @report-comment="reportComment"
         @open-reply="openReply"
         @close-reply="closeReply"
         @reply-input="setDraft"

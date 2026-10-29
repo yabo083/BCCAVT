@@ -337,8 +337,11 @@ export async function crawlSubject(
   const roots: Comment[] = [];
   const rootIds = new Set<string>();
   const listed: Comment[] = [];
+  const reasons: string[] = [];
   let cursor: Cursor | null = null;
   let rootsTruncated = false;
+  // 游标防环：复用缓存后，历史条目可能带重复/畸形的 next，循环会把 listed 推到长度溢出。
+  const seenCursors = new Set<Cursor>();
   for (;;) {
     throwIfAborted(runner.signal);
     const page: Page<Comment> = await runner.load<Page<Comment>>(
@@ -356,7 +359,13 @@ export async function crawlSubject(
     }
     runner.setPhase('roots', { fetched: roots.length, declared: subject.declaredCommentCount });
     cursor = page.next;
+    if (cursor !== null && seenCursors.has(cursor)) {
+      rootsTruncated = true;
+      reasons.push('平台返回了重复的翻页游标，顶层分页被中止');
+      break;
+    }
     if (cursor === null) break;
+    seenCursors.add(cursor);
     if (options.maxRoots > 0 && roots.length >= options.maxRoots) {
       rootsTruncated = true;
       break;
@@ -444,7 +453,6 @@ export async function crawlSubject(
   }
 
   const declared = subject.declaredCommentCount;
-  const reasons: string[] = [];
   if (rootsTruncated) reasons.push(`达到顶层评论上限 ${options.maxRoots}，仅抓取前 ${roots.length} 条根评论`);
   if (threadsTruncated) reasons.push(`部分评论树超过单树回复上限 ${options.maxRepliesPerThread}`);
   if (session.limitations.length > 0 && (declared === undefined || keptComments.length < declared)) {
