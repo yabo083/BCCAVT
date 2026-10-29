@@ -52,10 +52,15 @@ const TOKEN_NAMES: Record<keyof Omit<CanvasTokens, 'stances'>, string> = {
   onAccent: '--fg-on-accent',
 };
 
-/** 读一次 CSS 变量，并跟随 prefers-color-scheme 变化与令牌重新解析。 */
+/**
+ * 读一次 CSS 变量，并跟随 prefers-color-scheme 变化与令牌重新解析。
+ * 明暗与配色也可能由 `<html data-theme / data-palette / style>` 显式切换（工作台顶栏、跨文档跟随），
+ * 那不会触发媒体查询，所以同时盯住根元素这几个属性——否则画布上的文字留在旧主题的颜色里。
+ */
 export function useCanvasTokens(): Ref<CanvasTokens> {
   const tokens = shallowRef<CanvasTokens>(readTokens());
   let media: MediaQueryList | null = null;
+  let observer: MutationObserver | null = null;
   const refresh = (): void => {
     tokens.value = readTokens();
   };
@@ -63,10 +68,15 @@ export function useCanvasTokens(): Ref<CanvasTokens> {
   onMounted(() => {
     media = window.matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', refresh);
+    observer = new MutationObserver(refresh);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette', 'style'] });
     refresh();
   });
 
-  onBeforeUnmount(() => media?.removeEventListener('change', refresh));
+  onBeforeUnmount(() => {
+    media?.removeEventListener('change', refresh);
+    observer?.disconnect();
+  });
 
   return tokens;
 }

@@ -241,6 +241,7 @@ export class CrawlRunner {
                 });
               }
               stats.requests++;
+              const started = this.deps.now();
               try {
                 const result = await fn({
                   http: this.deps.http,
@@ -248,7 +249,7 @@ export class CrawlRunner {
                   signal: this.deps.signal,
                   identity: this.deps.http.identity ?? 'direct',
                 });
-                void this.limiter?.noteSuccess();
+                void this.limiter?.noteSuccess(this.deps.now() - started);
                 return result;
               } catch (error) {
                 if (error instanceof PlatformError && error.kind === 'rate-limited') {
@@ -315,8 +316,8 @@ export async function crawlSubject(
   });
 
   runner.setPhase('roots');
-  // 增量 / 全量都要重新遍历顶层分页，只有回放（cache-first）才吃分页缓存。
-  const usePageCache = options.refresh === 'cache-first';
+  // 增量/回放都吃 TTL 有效的分页缓存（只补缺页）；只有全量强制回源。
+  const usePageCache = options.refresh !== 'full';
   // 页面缓存必须按账号隔离：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户。
   const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
   const order = rootOrderOf(options);

@@ -46,10 +46,15 @@ describe('createSharedLimiter', () => {
     await a.acquire('interactive', signal);
     expect(sleeps).toEqual([]);
     expect(shared.state!.tokens).toBe(0);
-    // 第 4 个要等 1s 补充（rate=1/s），第 5 个再等 1s
+    // interactive 永不等令牌：第 4/5 个照拿不误（不睡、令牌可为负方向逼近 0）
     await a.acquire('interactive', signal);
     await b.acquire('interactive', signal);
-    expect(sleeps).toEqual([1000, 1000]);
+    expect(sleeps).toEqual([]);
+    // bulk 才等：tokens 不足 1+reserve 时睡到补充够
+    await a.acquire('bulk', signal);
+    await b.acquire('bulk', signal);
+    expect(sleeps.length).toBe(2);
+    expect(sleeps.every((ms) => ms > 0)).toBe(true);
   });
 
   it('bulk 只在 tokens >= 1 + reserve 时取：interactive 永远有令牌', async () => {

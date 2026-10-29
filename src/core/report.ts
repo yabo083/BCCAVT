@@ -209,7 +209,7 @@ export function rootOrderOf(options: Pick<CrawlOptions, 'order'>): RootOrder {
 
 /** 默认全量抓取、不限上限。 */
 export const DEFAULT_CRAWL_OPTIONS: CrawlOptions = {
-  refresh: 'full',
+  refresh: 'incremental',
   maxRoots: 0,
   maxRepliesPerThread: 0,
 };

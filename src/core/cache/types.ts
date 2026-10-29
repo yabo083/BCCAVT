@@ -24,7 +24,7 @@ export type Freshness =
 export const FRESHNESS_TTL_MS: Record<Freshness, number | null> = {
   session: 30 * 60_000,
   meta: 10 * 60_000,
-  page: 10 * 60_000,
+  page: 30 * 60_000,
   immutable: null,
   pointer: null,
 };

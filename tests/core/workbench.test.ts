@@ -186,10 +186,17 @@ describe('增量刷新', () => {
 
     const second = await workbench.analyzeSubject(adapter.subject.ref, options({ refresh: 'incremental' }), noop, signal);
 
+    // 新语义（友好抓取）：增量直接吃 TTL 有效页——根页命中 → 0 回源，看到的就是缓存里的旧数据
+    expect(adapter.calls.roots).toBe(0);
+    expect(adapter.threadCalls).toHaveLength(0);
+    expect(second.snapshot.comments.map((comment) => comment.id).sort()).toEqual(first.snapshot.comments.map((comment) => comment.id).sort());
+
+    // 对照：全量仍强制回源，才能发现 replyCount 变化并按需补抓 r2 的新回复
+    adapter.resetCalls();
+    const third = await workbench.analyzeSubject(adapter.subject.ref, options({ refresh: 'full' }), noop, signal);
     expect(adapter.calls.roots).toBe(1);
-    expect(adapter.threadCalls.map((call) => call.commentId)).toEqual(['r2']);
-    expect(second.fromSnapshot).toBe(false);
-    expect(second.snapshot.comments.map((comment) => comment.id).sort()).toEqual(['r1', 'r1-c1', 'r1-c2', 'r2', 'r2-c1', 'r2-c2', 'r3']);
+    expect(adapter.threadCalls.map((call) => call.commentId).sort()).toEqual(['r1', 'r2']); // 全量强回源：r1/r2 两棵树都重抓
+    expect(third.snapshot.comments.map((comment) => comment.id).sort()).toEqual(['r1', 'r1-c1', 'r1-c2', 'r2', 'r2-c1', 'r2-c2', 'r3']);
   });
 });
 

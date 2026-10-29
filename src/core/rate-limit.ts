@@ -31,6 +31,10 @@ export interface LimiterState {
   updatedAt: number;
   cooldownUntil: number;
   strikes: number;
+  /** AIMD 当前速率（rps）：1 起步，0.5 地板，4 封顶。 */
+  rate: number;
+  /** AIMD 慢速请求/限流前的连续快速成功计数（≥5 次 +0.2 rps）。 */
+  fastStreak: number;
 }
 
 export interface LimiterStore {
@@ -53,14 +57,22 @@ export interface SharedLimiterOptions {
 export interface SharedLimiter {
   /** 取一个令牌；需要等待时先 onWait(ms) 再睡到点重试。signal 贯穿可取消。 */
   acquire(priority: RequestPriority, signal: AbortSignal, onWait?: (ms: number) => void): Promise<void>;
-  /** 平台回 rate-limited：记 strike 并设共享冷却。 */
+  /** 平台回 rate-limited：记 strike、设共享冷却，并把速率砍半。 */
   noteRateLimited(retryAfterMs?: number): Promise<void>;
-  /** 一次成功回源：清 strikes（冷却由时间自然过期）。 */
-  noteSuccess(): Promise<void>;
+  /** 一次成功回源：清 strikes；latencyMs 喂 AIMD（快成功 +0.2/5连，>3s ×0.5）。 */
+  noteSuccess(latencyMs?: number): Promise<void>;
 }
 
 const COOLDOWN_BASE_MS = 30_000;
 const COOLDOWN_CAP_MS = 10 * 60_000;
+// AIMD（TCP 式速率自适）：起始 1 rps；每 5 个连续 <1500ms 的成功 +0.2；
+// rate-limited 或 >3000ms 的慢请求 ×0.5；地板 0.5、封顶 4。
+const RATE_FLOOR = 0.5;
+const RATE_CEIL = 4;
+const RATE_INCREASE = 0.2;
+const FAST_STREAK_TARGET = 5;
+const FAST_LATENCY_MS = 1500;
+const SLOW_LATENCY_MS = 3000;
 
 /** localStorage 存根：跨文档天然共享（同源扩展页面与 iframe 实测共享，见 ADR-0010）。 */
 export function localStorageLimiterStore(key: string): LimiterStore {
@@ -114,8 +126,12 @@ export function createSharedLimiter(options: SharedLimiterOptions): SharedLimite
   let chain: Promise<unknown> = Promise.resolve();
   const mutate = async <T>(fn: (state: LimiterState) => T | Promise<T>): Promise<T> => {
     const body = async (): Promise<T> => {
-      const state = (await store.get()) ?? { tokens: burst, updatedAt: now(), cooldownUntil: 0, strikes: 0 };
-      state.tokens = Math.min(burst, state.tokens + ((now() - state.updatedAt) / 1000) * ratePerSec);
+      const state = (await store.get()) ?? { tokens: burst, updatedAt: now(), cooldownUntil: 0, strikes: 0, rate: ratePerSec, fastStreak: 0 };
+      if (state.rate === undefined) {
+        state.rate = ratePerSec;
+        state.fastStreak = 0;
+      }
+      state.tokens = Math.min(burst, state.tokens + ((now() - state.updatedAt) / 1000) * state.rate);
       state.updatedAt = now();
       const result = await fn(state);
       await store.set(state);
@@ -135,13 +151,18 @@ export function createSharedLimiter(options: SharedLimiterOptions): SharedLimite
         throwIfAborted(signal);
         const waitMs = await mutate((state) => {
           const at = now();
-          const threshold = priority === 'bulk' ? 1 + reserve : 1;
           if (at < state.cooldownUntil) return state.cooldownUntil - at;
+          if (priority === 'interactive') {
+            // interactive 永不等令牌：有就拿，没有也放行（只有共享冷却才挡）
+            if (state.tokens >= 1) state.tokens -= 1;
+            return 0;
+          }
+          const threshold = 1 + reserve;
           if (state.tokens >= threshold) {
             state.tokens -= 1;
             return 0;
           }
-          return ((threshold - state.tokens) / ratePerSec) * 1000;
+          return ((threshold - state.tokens) / state.rate) * 1000;
         });
         if (waitMs <= 0) return;
         onWait?.(waitMs);
@@ -151,13 +172,28 @@ export function createSharedLimiter(options: SharedLimiterOptions): SharedLimite
     async noteRateLimited(retryAfterMs) {
       await mutate((state) => {
         state.strikes += 1;
+        state.rate = Math.max(RATE_FLOOR, state.rate * 0.5);
+        state.fastStreak = 0;
         const backoff = Math.min(COOLDOWN_CAP_MS, COOLDOWN_BASE_MS * 2 ** (state.strikes - 1));
         state.cooldownUntil = Math.max(state.cooldownUntil, now() + Math.max(retryAfterMs ?? 0, backoff));
       });
     },
-    async noteSuccess() {
+    async noteSuccess(latencyMs) {
       await mutate((state) => {
         state.strikes = 0;
+        if (latencyMs === undefined) return;
+        if (latencyMs > SLOW_LATENCY_MS) {
+          state.rate = Math.max(RATE_FLOOR, state.rate * 0.5);
+          state.fastStreak = 0;
+        } else if (latencyMs < FAST_LATENCY_MS) {
+          state.fastStreak += 1;
+          if (state.fastStreak >= FAST_STREAK_TARGET) {
+            state.rate = Math.min(RATE_CEIL, state.rate + RATE_INCREASE);
+            state.fastStreak = 0;
+          }
+        } else {
+          state.fastStreak = 0;
+        }
       });
     },
   };
