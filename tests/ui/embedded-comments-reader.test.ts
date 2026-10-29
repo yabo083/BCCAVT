@@ -164,6 +164,10 @@ function deliverLocate(commentId: string): void {
 }
 
 /** 已渲染行按注释文字归类：断言「谁排在谁前面」时比整段文本稳定。 */
+function rowIds(wrapper: VueWrapper): string[] {
+  return wrapper.findAll('article.comment-row').map((row) => row.attributes('data-comment-id')!);
+}
+
 function rowKinds(wrapper: VueWrapper): string[] {
   return wrapper.findAll('article.comment-row').map((row) => {
     const text = row.text();
@@ -915,5 +919,120 @@ describe('工作台 / 图谱 → 评论区定位', () => {
       .find((row) => row.attributes('data-comment-id') === '11')!
       .classes();
     expect(classes).toContain('flash-highlight');
+  });
+});
+
+describe('顶层排序切换（最热 | 最新）', () => {
+  const HOT_A = makeComment({ id: 'h1', text: '热评一' });
+  const HOT_B = makeComment({ id: 'h2', text: '热评二' });
+  const TIME_A = makeComment({ id: 't1', text: '新评一' });
+  const TIME_B = makeComment({ id: 't2', text: '新评二' });
+  /** 按 order 分数据的假分页：plan 键带 'hot|' / 'time|' 前缀。 */
+  function planByOrder(pages: Array<{ order: string; cursor: string | null; comments: Comment[]; next: string | null }>): void {
+    const byOrder = new Map(pages.map((p) => [`${p.order}|${p.cursor ?? 'start'}`, { comments: p.comments, next: p.next }]));
+    mocks.previewRootsPage.mockImplementation(
+      async (_ref: SubjectRef, cursor: string | null, options: { order?: string }, onProgress: (p: { phase: string; fetched: number; declared: number }) => void) => {
+        const page = byOrder.get(`${options.order ?? 'time'}|${cursor ?? 'start'}`);
+        if (page === undefined) throw new Error(`用例没准备 ${options.order}/${String(cursor)} 的页`);
+        onProgress({ phase: 'roots', fetched: page.comments.length, declared: 100 });
+        return {
+          subject: SUBJECT_META,
+          comments: page.comments,
+          roots: page.comments.filter((c) => c.rootId === null),
+          next: page.next,
+          declared: 100,
+          limitations: [],
+        };
+      },
+    );
+  }
+
+  it('首屏默认按最热取数', async () => {
+    planPages([{ cursor: null, comments: [HOT_A, HOT_B], next: null }]);
+    await open();
+    expect(mocks.previewRootsPage.mock.calls[0]![2]).toMatchObject({ order: 'hot' });
+    expect(mocks.previewRootsPage.mock.calls[0]![1]).toBeNull();
+  });
+
+  it('点「最新」：以 time 序从游标起点重取，旧序行整批替换，aria-pressed 更新', async () => {
+    planByOrder([
+      { order: 'hot', cursor: null, comments: [HOT_A, HOT_B], next: null },
+      { order: 'time', cursor: null, comments: [TIME_A, TIME_B], next: null },
+    ]);
+    const wrapper = await open();
+    expect(rowIds(wrapper)).toEqual(['h1', 'h2']);
+
+    await wrapper.findAll('.sort-opt')[1]!.trigger('click');
+    await settle();
+
+    const calls = mocks.previewRootsPage.mock.calls;
+    expect(calls.at(-1)![2]).toMatchObject({ order: 'time' });
+    expect(calls.at(-1)![1]).toBeNull(); // 从新序的起点开始
+    expect(rowIds(wrapper)).toEqual(['t1', 't2']);
+    const opts = wrapper.findAll('.sort-opt');
+    expect(opts[0]!.attributes('aria-pressed')).toBe('false');
+    expect(opts[1]!.attributes('aria-pressed')).toBe('true');
+  });
+
+  it('旧序的在途页晚到也不会并进新序的流', async () => {
+    const HOT_C = makeComment({ id: 'h3', text: '迟到的热评' });
+    planByOrder([
+      { order: 'hot', cursor: null, comments: [HOT_A, HOT_B], next: 'p1' },
+      { order: 'hot', cursor: 'p1', comments: [HOT_C], next: null },
+      { order: 'time', cursor: null, comments: [TIME_A], next: null },
+    ]);
+    const wrapper = await open();
+    expect(rowIds(wrapper)).toEqual(['h1', 'h2']);
+
+    // 旧序第二页被闸门卡在在途：切序发生在这时
+    const gate = deferred<void>();
+    mocks.previewRootsPage.mockImplementationOnce(async (_r, _c, _o, onProgress, signal) => {
+      await gate.promise;
+      if (signal.aborted) throw new Error('aborted');
+      onProgress({ phase: 'roots', fetched: 1, declared: 100 });
+      return { subject: SUBJECT_META, comments: [HOT_C], roots: [HOT_C], next: null, declared: 100, limitations: [] };
+    });
+    deliverViewport(100_000);
+    await settle(2);
+
+    await wrapper.findAll('.sort-opt')[1]!.trigger('click'); // abort 旧序 + reset + time 取数
+    gate.resolve(); // 旧序第二页此刻才「回来」
+    await settle();
+
+    expect(rowIds(wrapper)).toEqual(['t1']); // 迟到的热评页绝不并入
+  });
+
+  it('热 → 新 → 热：第三次调用仍是 hot 序且游标归零', async () => {
+    planByOrder([
+      { order: 'hot', cursor: null, comments: [HOT_A], next: null },
+      { order: 'time', cursor: null, comments: [TIME_A], next: null },
+    ]);
+    const wrapper = await open();
+    const buttons = () => wrapper.findAll('.sort-opt');
+    await buttons()[1]!.trigger('click');
+    await settle();
+    await buttons()[0]!.trigger('click');
+    await settle();
+    const calls = mocks.previewRootsPage.mock.calls;
+    expect(calls.at(-1)![2]).toMatchObject({ order: 'hot' });
+    expect(calls.at(-1)![1]).toBeNull();
+    expect(rowIds(wrapper)).toEqual(['h1']);
+  });
+
+  it('切换后「刷新」按钮按当前序重放', async () => {
+    planByOrder([
+      { order: 'hot', cursor: null, comments: [HOT_A], next: null },
+      { order: 'time', cursor: null, comments: [TIME_A], next: null },
+    ]);
+    const wrapper = await open();
+    await wrapper.findAll('.sort-opt')[1]!.trigger('click');
+    await settle();
+    mocks.previewRootsPage.mockClear();
+    await wrapper.get('button[aria-label="刷新"]').trigger('click');
+    await settle();
+    const calls = mocks.previewRootsPage.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call[2]).toMatchObject({ order: 'time' });
+    expect(calls[0]![1]).toBeNull();
   });
 });

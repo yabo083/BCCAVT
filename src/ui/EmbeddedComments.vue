@@ -78,7 +78,7 @@ import {
   isReaderWriteResult,
 } from '@/extension/page-comments';
 import type { ReaderTheme, UserCardRect } from '@/extension/page-comments';
-import type { Comment, Subject, SubjectRef } from '@/core/model';
+import type { Comment, RootOrder, Subject, SubjectRef } from '@/core/model';
 import { PlatformError } from '@/core/errors';
 import { buildForest } from '@/core/tree';
 import type {
@@ -168,6 +168,12 @@ const actionError = ref<string | null>(null);
  * 它的根评论块，钉在评论流上方（与原生置顶同款位置）。它不进流、不改流的行序（ADR-0004）。
  */
 const located = shallowRef<{ root: Comment; comments: Comment[] } | null>(null);
+/**
+ * 顶层排序：'hot' 最热（与原生默认一致）/ 'time' 最新。切换是**换数据集**而不是客户端重排
+ * （ADR-0004：渲染层永不动已取回的行序）——reset + 从新序的游标起点重取，页键带 order
+ * 所以来回切换直接命中各自缓存。不持久化、不设选项。
+ */
+const order = ref<RootOrder>('hot');
 
 /**
  * 游标分页状态机：它自己不是响应式的，变化时换成一份状态快照存进 pagerState。
@@ -485,7 +491,7 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
     if (resolved === null) throw new Error('无法把当前地址识别为 B 站视频，请在视频页使用');
     // 解析成功即记账：这次取数认的就是这个目标（之后 URL 怎么抖，身份都不会变）
     targetId = identityOf(resolved.target.subject);
-    const options: CrawlOptions = { refresh, maxRoots: 0, maxRepliesPerThread: PAGE_REPLIES };
+    const options: CrawlOptions = { refresh, maxRoots: 0, maxRepliesPerThread: PAGE_REPLIES, order: order.value };
     const page = await readerWorkbench.previewRootsPage(
       resolved.target.subject,
       cursor,
@@ -587,6 +593,34 @@ async function resetTarget(): Promise<void> {
   // （同一个值仍然不重复上报——高度下界由 committedHeight 继续持有）
   await reportHeight(true);
   await loadFirstPage();
+}
+
+/**
+ * 切换顶层排序（最热 ↔ 最新）：换数据集，不是客户端重排（ADR-0004）。
+ * 中断旧序的在途页（pager 的 generation 也让它即使晚到也丢弃）、回到游标起点重取第一页；
+ * 目标身份 / 主体 / 定位块 / 已展开的回复 / 主题全部保留，渲染批次与折叠态清零。
+ * 页键带 order，来回切直接命中各自缓存。
+ */
+async function switchOrder(next: RootOrder): Promise<void> {
+  if (next === order.value) return;
+  order.value = next;
+  // 旧序的在途请求作废：abort 让它走取消判定，generation++ 保证晚到的结果也进不了新状态
+  controller?.abort();
+  controller = null;
+  pager.reset();
+  collapsed.value = new Set<string>();
+  selectedId.value = null;
+  rowCap.value = ROW_PAGE_SIZE;
+  visibleBottom = -Infinity;
+  sentinelVisible = false;
+  armed = true;
+  canceled = false;
+  await loadFirstPage();
+  // 换序是结构性变化（旧序内容已从 DOM 消失）：允许往宿主上报更小的值
+  await reportHeight(true);
+  // 头被滚出视野时把它拽回来——新序的第一页在最上面，用户该从那里看起
+  const head = rootEl.value?.querySelector('.list-head');
+  if (head !== null && head !== undefined && head.getBoundingClientRect().top < 0) head.scrollIntoView({ block: 'start' });
 }
 
 /**
@@ -1258,6 +1292,11 @@ onBeforeUnmount(() => {
       <div class="list-head row">
         <h2 class="list-title">评论</h2>
         <span class="list-count tnum">{{ formatCount(commentCount) }}</span>
+        <span class="sort-toggle small" role="group" aria-label="排序方式">
+          <button type="button" class="sort-opt" :class="{ active: order === 'hot' }" :aria-pressed="order === 'hot'" @click="switchOrder('hot')">最热</button>
+          <span class="sort-sep" aria-hidden="true">|</span>
+          <button type="button" class="sort-opt" :class="{ active: order === 'time' }" :aria-pressed="order === 'time'" @click="switchOrder('time')">最新</button>
+        </span>
         <span class="grow" />
         <span v-if="hiddenRows > 0" class="subtle small tnum">已显示 {{ formatCount(listRows.length) }} 行</span>
       </div>
@@ -1425,6 +1464,35 @@ onBeforeUnmount(() => {
 .list-count {
   font-size: var(--fs-sm);
   color: var(--fg-subtle);
+}
+
+/* 排序切换：与原生「最热 | 最新」同款的分段文本控件，只用既有令牌。 */
+.sort-toggle {
+  align-items: baseline;
+  display: inline-flex;
+  gap: var(--sp-1);
+}
+
+.sort-opt {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.sort-opt:hover {
+  color: var(--fg);
+}
+
+.sort-opt.active {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.sort-sep {
+  color: var(--border-strong);
 }
 
 /* 哨兵：零高度、不占布局，只给 IntersectionObserver 一个「已渲染内容末尾」的观测点。 */
