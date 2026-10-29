@@ -595,9 +595,25 @@ describe('加载指示与完整度说明', () => {
     const wrapper = await open();
 
     const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
-    expect(label).toContain('平台声明 100 条评论，实际读到 2 条');
+    expect(label).toContain('平台声明 100 条评论，顶层与各楼回复合计只能读到 3 条');
     expect(label).toContain(limitation);
     expect(wrapper.text()).toContain('不完整');
+  });
+
+  it('顶层读到底、只是楼中楼没展开：不算「不完整」（和原生一样按需展开）', async () => {
+    // 平台声明 100 条 = 2 条顶层 + 两楼各自声明的 49 条回复
+    planPages([
+      {
+        cursor: null,
+        comments: [makeComment({ ...ROOT, replyCount: 49 }), makeComment({ ...SECOND, replyCount: 49 })],
+        next: null,
+      },
+    ]);
+    const wrapper = await open();
+
+    const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
+    expect(label).not.toContain('平台声明 100 条评论');
+    expect(wrapper.text()).not.toContain('不完整');
   });
 
   it('登录态读全了就不冒充「不完整」：身份限制不写进说明', async () => {

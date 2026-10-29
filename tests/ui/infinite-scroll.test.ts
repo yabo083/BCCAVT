@@ -169,4 +169,37 @@ describe('CursorPager', () => {
     pager.reset();
     expect(listener.mock.calls.length).toBe(before);
   });
+  it('游标成环即到底：同一 next 再来一次时 hasNext=false 并给出 reason', async () => {
+    const { fetchPage } = pagedFetch([
+      { items: [{ id: 'a' }], next: 'loop' },
+      { items: [{ id: 'b' }], next: 'loop' },
+    ]);
+    const pager = new CursorPager<Item>({ fetchPage, cycleEndReason: '热度排序的翻页到此为止' });
+
+    await pager.next();
+    await pager.next();
+
+    expect(pager.state()).toMatchObject({ hasNext: false, loading: false, endReason: '热度排序的翻页到此为止' });
+    expect(pager.state().items.map((i) => i.id)).toEqual(['a', 'b']);
+  });
+
+  it('连续两页零新增即到底：不再发请求并给出 reason', async () => {
+    const { fetchPage, cursors } = pagedFetch([
+      { items: [{ id: 'a' }], next: 'c1' },
+      { items: [{ id: 'a' }], next: 'c2' },
+      { items: [{ id: 'a' }], next: 'c3' },
+      { items: [{ id: 'x' }], next: 'c4' },
+    ]);
+    const pager = new CursorPager<Item>({ fetchPage });
+
+    await pager.next();
+    await pager.next();
+    await pager.next();
+    await pager.next();
+
+    const s = pager.state();
+    expect(s.hasNext).toBe(false);
+    expect(s.endReason).toContain('翻页不再返回新评论');
+    expect(cursors.length).toBe(3);
+  });
 });

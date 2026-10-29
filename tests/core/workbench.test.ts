@@ -724,6 +724,8 @@ describe('可恢复抓取', () => {
     const { workbench } = build(adapter);
     const result = await workbench.analyzeSubject(adapter.subject.ref, options(), noop, new AbortController().signal);
     expect(result.snapshot.completeness.truncated).toBe(true);
-    expect(result.snapshot.completeness.reasons.join(' ')).toContain('游标');
+    const r = result.snapshot.completeness.reasons.join(' ');
+    expect(r).toContain('游标');
+    expect(r).not.toContain('上限');
     expect(result.snapshot.comments.map((c) => c.id).sort()).toEqual(['r1', 'r2']);
   });

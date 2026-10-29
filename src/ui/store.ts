@@ -7,7 +7,7 @@ import { PlatformError, isAbort } from '@/core/errors';
 import type { PlatformErrorKind } from '@/core/errors';
 import type { PlatformId, Session, SubjectRef } from '@/core/model';
 import { DEFAULT_CRAWL_OPTIONS } from '@/core/report';
-import { READER_DEFAULT_ORDER_KEY } from '@/extension/page-comments';
+
 import type {
   AnalysisResult,
   CrawlOptions,
@@ -57,12 +57,6 @@ export function describeError(error: unknown): string {
  * 而 init() 是异步的——晚一拍就已经把顶栏和视图切换渲染进图谱窗口了。
  */
 const surface = surfaceOf(new URLSearchParams(location.search));
-
-// 工作台爬取跟随阅读器默认序（同一 order 页键才吃得到阅读器已抓的页）
-let readerDefaultOrder: CrawlOptions['order'] = 'hot';
-if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-  void chrome.storage.local.get(READER_DEFAULT_ORDER_KEY).then((bag) => { const v = bag?.[READER_DEFAULT_ORDER_KEY]; if (v === 'time' || v === 'hot') readerDefaultOrder = v; }).catch(() => {});
-}
 
 export const state = reactive({
   view: 'target' as View,
@@ -151,7 +145,7 @@ function crawlSubject(ref: SubjectRef, refresh: RefreshMode, apply: (result: Ana
   return execute({
     kind: 'subject',
     label: `${ref.id} 评论区`,
-    run: (signal, onProgress) => workbench.analyzeSubject(ref, { ...state.options, refresh, order: readerDefaultOrder }, onProgress, signal),
+    run: (signal, onProgress) => workbench.analyzeSubject(ref, { ...state.options, refresh }, onProgress, signal),
     apply,
   });
 }

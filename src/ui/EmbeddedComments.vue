@@ -197,6 +197,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
  */
 const pager = new CursorPager<Comment>({
   fetchPage,
+  cycleEndReason: '热度排序的翻页到此为止，切换「最新」可看到全部评论',
   // 用户点「取消」或阅读器卸载造成的中断不是失败：状态机据此不记账，界面也不会弹错误
   isCanceled: (error) => error instanceof Error && error.name === CANCELED_ERROR_NAME,
 });
@@ -353,13 +354,20 @@ const completeness = computed<Completeness>(() => {
   if (hasNext.value) {
     return { declared: declaredTotal, fetched, truncated: true, reasons: ['还没读完：滚到底会自动接着取下一页'] };
   }
-  const unproven = declaredTotal === undefined || fetched < declaredTotal;
+  // 楼中楼和原生一样按需展开：顶层读到底时，以「顶层 + 各楼声明的回复数」核对平台总数，
+  // 没展开的回复不算缺失（否则 65 条顶层全读完也会显示「不完整 77 / 191」）。
+  let reachable = 0;
+  for (const item of pagerState.value.items) {
+    if (item.rootId === null) reachable += 1 + item.replyCount;
+  }
+  const unproven = declaredTotal === undefined || reachable < declaredTotal;
   const reasons: string[] = [];
-  if (declaredTotal !== undefined && fetched < declaredTotal) reasons.push(`平台声明 ${declaredTotal} 条评论，实际读到 ${fetched} 条`);
+  if (pagerState.value.endReason !== null) reasons.push(pagerState.value.endReason);
+  if (declaredTotal !== undefined && reachable < declaredTotal) reasons.push(`平台声明 ${declaredTotal} 条评论，顶层与各楼回复合计只能读到 ${reachable} 条`);
   if (unproven) {
     for (const limitation of identityLimitations.value) if (!reasons.includes(limitation)) reasons.push(limitation);
   }
-  return { declared: declaredTotal, fetched, truncated: reasons.length > 0, reasons };
+  return { declared: declaredTotal, fetched: reachable, truncated: reasons.length > 0, reasons };
 });
 /** 顶部错误：扩展失效 > 首屏取数失败（还没有任何内容）> 展开回复 / 打开图谱这类操作失败。 */
 const loadError = computed<string | null>(() => {
@@ -501,6 +509,8 @@ function cancel(): void {
  * 主体元数据（标题）、首条根评论（默认选中）——以及失败时给一句能展示的话。
  */
 async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
+  // 每次翻页先清旧进度：页内请求在跑时，页脚只该显示「取数中」，不该停在上一次翻页的「完成」上。
+  progress.value = null;
   const refresh = pendingRefresh;
   const abort = new AbortController();
   controller = abort;
@@ -1402,7 +1412,7 @@ onBeforeUnmount(() => {
     <div v-if="hasItems" class="comment-list">
       <div class="list-head row">
         <h2 class="list-title">评论</h2>
-        <span class="list-count tnum">{{ formatCount(commentCount) }}</span>
+        <span class="list-count tnum">{{ formatCount(declared ?? commentCount) }}</span>
         <span class="sort-toggle small" role="group" aria-label="排序方式">
           <button type="button" class="sort-opt" :class="{ active: order === 'hot' }" :aria-pressed="order === 'hot'" @click="switchOrder('hot')">最热</button>
           <span class="sort-sep" aria-hidden="true">|</span>
