@@ -21,6 +21,11 @@ export interface Author {
   avatarUrl?: string;
   /** 平台等级（bilibili 0–6）。 */
   level?: number;
+  /**
+   * 作者主页地址（适配器归一化后给出）。UI 只负责把它渲染成链接，不自己拼平台 URL；
+   * 平台没提供时省略——此时作者名与头像退化成纯展示。
+   */
+  profileUrl?: string;
 }
 
 /** 已解析的主体元数据。 */
@@ -36,6 +41,16 @@ export interface Subject {
   declaredCommentCount?: number;
   /** 适配器私有定位参数（如 bilibili 的 oid/type），引擎原样传回，不解读。 */
   locator: Record<string, string | number>;
+}
+
+/**
+ * 表情图片：适配器只填入经校验的 https CDN 地址；宽高是可选提示（平台未给时省略），
+ * 渲染端在 em 尺度内自行约束，不信任这里的数值去做布局。
+ */
+export interface Emote {
+  url: string;
+  width?: number;
+  height?: number;
 }
 
 export interface Comment {
@@ -58,6 +73,11 @@ export interface Comment {
   byCreator?: boolean;
   /** 创作者点赞过。 */
   creatorLiked?: boolean;
+  /**
+   * 正文里出现的表情 token（如 `[支持]`）→ 图片。仅当平台确实给了合法表情时才存在；
+   * 未知 token 原样按文本渲染，所以这里缺失也不影响正文可读性。
+   */
+  emotes?: Record<string, Emote>;
 }
 
 /** 分析目标：整个主体的评论区，或一条评论（含其全部后代）构成的子树。 */

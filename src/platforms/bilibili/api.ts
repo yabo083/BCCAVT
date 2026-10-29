@@ -1,12 +1,27 @@
 /**
- * Bilibili 评论区 API 调用。这里是唯一的网络边界：信封校验、错误码映射、WBI 签名与密钥缓存。
- * 返回的是“已验证结构、字段仍是原始 JSON”的中间形态，字段级校验交给 normalize.ts。
+ * Bilibili 评论区 API 调用。这里是唯一的网络边界：信封校验、错误码映射、WBI 签名与密钥缓存，
+ * 以及评论写操作（点赞 / 发表 / 回复）的参数装配。
+ * 读接口返回的是“已验证结构、字段仍是原始 JSON”的中间形态，字段级校验交给 normalize.ts。
+ *
+ * 端点与参数来源：bilibili-API-collect 的 docs/comment/action.md（原仓库 2026-01 已下架，取自社区镜像
+ * z0z0r4/bilibili-API-collect）——`POST /x/v2/reply/action`（oid/type/rpid/action/csrf，action 0=取消赞 1=点赞）
+ * 与 `POST /x/v2/reply/add`（oid/type/message/root?/parent?/plat/csrf，message 上限 1000 字符）；
+ * 错误码表亦以该文档为准。the1812/Bilibili-Evolved 的 comment-apis.ts 只管原生评论区的 DOM 增强，
+ * 没有写接口，不能作为写层来源。
  */
 import { cacheKey } from '../../core/cache/types';
 import { PlatformError, type PlatformErrorKind } from '../../core/errors';
-import type { Author, Session, SubjectRef } from '../../core/model';
-import type { FetchContext } from '../../core/platform';
+import type { Author, Comment, Session, Subject, SubjectRef } from '../../core/model';
+import type {
+  FetchContext,
+  HttpClient,
+  LikeCommentInput,
+  PlatformWrites,
+  ReplyCommentInput,
+  WriteAuth,
+} from '../../core/platform';
 import { arrField, asRecord, numField, optId, optNum, optionalRecord, optStr, strField, type RawObject } from './raw';
+import { httpsImageUrl, normalizeReply } from './normalize';
 import { keyFromWbiUrl, signQuery, type WbiKeys } from './wbi';
 
 const API_BASE = 'https://api.bilibili.com';
@@ -23,13 +38,27 @@ export const ANONYMOUS_LIMITATION = '未登录：顶层评论可能被平台截�
 /** 平台错误码 → 统一错误类型。未列出的码按 protocol 处理（多半是适配器需要跟进改版）。 */
 const CODE_ERRORS: Record<number, { kind: PlatformErrorKind; message: string }> = {
   [-101]: { kind: 'auth-required', message: '未登录：该操作需要先登录 Bilibili' },
+  [-102]: { kind: 'auth-required', message: '该账号已被封停，无法操作' },
+  [-111]: { kind: 'auth-required', message: 'CSRF 校验失败：登录态已失效，请刷新页面后重试' },
   [-400]: { kind: 'invalid-input', message: '请求参数错误' },
   [-403]: { kind: 'auth-required', message: '访问权限不足（登录或签名失效）' },
   [-404]: { kind: 'not-found', message: '内容不存在或已删除' },
   [-352]: { kind: 'rate-limited', message: '触发 Bilibili 风控，请稍后再试' },
   [-412]: { kind: 'rate-limited', message: '请求被 Bilibili 风控拦截，请稍后再试' },
+  [-509]: { kind: 'rate-limited', message: '操作过于频繁，请稍后再试' },
   12002: { kind: 'unavailable', message: '评论区已关闭' },
+  12003: { kind: 'unavailable', message: '该评论区禁止回复' },
+  12004: { kind: 'unavailable', message: '该评论禁止点赞或点踩' },
   12006: { kind: 'not-found', message: '评论不存在或已删除' },
+  12009: { kind: 'invalid-input', message: '评论主体的 type 不合法' },
+  12011: { kind: 'invalid-input', message: '不合法的赞或踩操作' },
+  12015: { kind: 'unavailable', message: '需要评论验证码，请先在 B 站页面完成验证' },
+  12016: { kind: 'invalid-input', message: '评论内容包含敏感信息' },
+  12025: { kind: 'invalid-input', message: '评论字数过多' },
+  12035: { kind: 'unavailable', message: '该账号被 UP 主列入评论黑名单' },
+  12045: { kind: 'unavailable', message: '购买后即可发表评论' },
+  12051: { kind: 'invalid-input', message: '重复评论，请勿刷屏' },
+  12052: { kind: 'unavailable', message: '评论区已关闭' },
   12061: { kind: 'unavailable', message: '评论区不可访问' },
   62002: { kind: 'not-found', message: '稿件不存在或不可见' },
   62004: { kind: 'unavailable', message: '稿件审核中，评论区暂不可读' },
@@ -99,7 +128,7 @@ export async function fetchSession(ctx: FetchContext): Promise<Session> {
   }
   const user: Author = { id: strField(nav, 'mid', 'nav.data'), name: strField(nav, 'uname', 'nav.data') };
   const face = optStr(nav, 'face');
-  if (face) user.avatarUrl = face;
+  if (face) user.avatarUrl = httpsImageUrl(face);
   const level = optNum(optionalRecord(nav['level_info']) ?? {}, 'current_level');
   if (level !== undefined) user.level = level;
   return { platform: 'bilibili', loggedIn: true, user, limitations: [] };
@@ -128,9 +157,9 @@ export async function fetchVideoView(ref: SubjectRef, ctx: FetchContext): Promis
     owner: { id: strField(owner, 'mid', 'view.data.owner'), name: strField(owner, 'name', 'view.data.owner') },
   };
   const cover = optStr(data, 'pic');
-  if (cover) view.coverUrl = cover;
+  if (cover) view.coverUrl = httpsImageUrl(cover);
   const face = optStr(owner, 'face');
-  if (face) view.owner.avatarUrl = face;
+  if (face) view.owner.avatarUrl = httpsImageUrl(face);
   return view;
 }
 
@@ -138,6 +167,16 @@ export async function fetchVideoView(ref: SubjectRef, ctx: FetchContext): Promis
 export interface SubjectLocator {
   oid: string;
   type: number;
+}
+
+/** 从 Subject.locator 里取 oid/type；缺失或类型不对时报错（读、写两条路共用这一个入口）。 */
+export function locatorOf(subject: Subject): SubjectLocator {
+  const oid = subject.locator['oid'];
+  const type = subject.locator['type'];
+  if ((typeof oid !== 'string' && typeof oid !== 'number') || typeof type !== 'number') {
+    throw new PlatformError('protocol', '主体缺少 oid/type 定位参数，请重新解析主体', { platform: 'bilibili' });
+  }
+  return { oid: String(oid), type };
 }
 
 async function signedQuery(params: Record<string, string | number>, ctx: FetchContext): Promise<string> {
@@ -226,5 +265,93 @@ export async function fetchThreadPage(
     nextOffset: optStr(pagination, 'next_offset') ?? null,
     isEnd: pageCursor['is_end'] === true,
     upperMid: optId(optionalRecord(body['upper']) ?? {}, 'mid') ?? null,
+  };
+}
+
+/** 正文上限（字符）：文档规定 message 最大 1000 字符。 */
+const MAX_MESSAGE_LENGTH = 1000;
+
+/** 鉴权校验：csrf 缺失就地失败；错误文本只说“缺少令牌”，绝不回显令牌本身。 */
+function requireCsrf(auth: WriteAuth): string {
+  const csrf = typeof auth.csrf === 'string' ? auth.csrf.trim() : '';
+  if (csrf === '') {
+    throw new PlatformError('invalid-input', '缺少 CSRF 令牌（bili_jct），无法执行写操作', { platform: 'bilibili' });
+  }
+  return csrf;
+}
+
+/** 正文校验：空白与超长在本地拦下，避免把注定失败的请求打出去。 */
+function requireMessage(text: string): string {
+  if (typeof text !== 'string' || text.trim() === '') {
+    throw new PlatformError('invalid-input', '评论内容不能为空', { platform: 'bilibili' });
+  }
+  const length = [...text].length;
+  if (length > MAX_MESSAGE_LENGTH) {
+    throw new PlatformError('invalid-input', `评论内容超过 ${MAX_MESSAGE_LENGTH} 字符上限（当前 ${length} 字符）`, {
+      platform: 'bilibili',
+    });
+  }
+  return text;
+}
+
+/** 写请求的信封：表单 POST 进、data 出，code !== 0 一律映射成 PlatformError。 */
+async function postWrite(url: string, params: Record<string, string>, http: HttpClient): Promise<unknown> {
+  const envelope = readEnvelope(await http.postForm(url, params));
+  if (envelope.code !== 0) throw codeToError(envelope.code, envelope.message);
+  return envelope.data;
+}
+
+/**
+ * 写能力实现。csrf 由调用方（内容脚本）在写执行时现读传入，本层只在请求体里即时用一次：
+ * 不缓存、不落盘、不进 URL、不进日志与错误文本。
+ */
+export function createBilibiliWrites(http: HttpClient): PlatformWrites {
+  return {
+    /** 点赞 / 取消：POST /x/v2/reply/action，action=1 点赞、0 取消。 */
+    async likeComment(input: LikeCommentInput, auth: WriteAuth): Promise<void> {
+      const csrf = requireCsrf(auth);
+      const locator = locatorOf(input.subject);
+      await postWrite(
+        `${API_BASE}/x/v2/reply/action`,
+        {
+          oid: locator.oid,
+          type: String(locator.type),
+          rpid: input.commentId,
+          action: input.action === 'like' ? '1' : '0',
+          csrf,
+        },
+        http,
+      );
+    },
+
+    /** 发表 / 回复：POST /x/v2/reply/add，成功返回归一化的新评论。 */
+    async replyComment(input: ReplyCommentInput, auth: WriteAuth): Promise<Comment> {
+      const csrf = requireCsrf(auth);
+      const message = requireMessage(input.text);
+      const locator = locatorOf(input.subject);
+      const params: Record<string, string> = {
+        oid: locator.oid,
+        type: String(locator.type),
+        message,
+        plat: '1',
+        csrf,
+      };
+      const target = input.commentId ?? null;
+      if (target !== null) {
+        if (target === '') {
+          throw new PlatformError('invalid-input', '回复的目标评论 id 不能为空', { platform: 'bilibili' });
+        }
+        // 二级评论：root 与 parent 同为被回复的根评论；更深的回复：parent 是被回复的那条楼中楼。
+        params['root'] = input.rootId === undefined || input.rootId === null || input.rootId === '' ? target : input.rootId;
+        params['parent'] = target;
+      }
+      const data = asRecord(await postWrite(`${API_BASE}/x/v2/reply/add`, params, http), 'add.data');
+      const reply = data['reply'];
+      // 成功即代表评论已发出，但平台偶尔不回评论本体；没有可归一化的对象，按协议异常处理。
+      if (typeof reply !== 'object' || reply === null || Array.isArray(reply)) {
+        throw new PlatformError('protocol', '评论已提交，但平台未返回评论本体（请刷新评论区查看）', { platform: 'bilibili' });
+      }
+      return normalizeReply(reply, { path: 'add.data.reply' });
+    },
   };
 }

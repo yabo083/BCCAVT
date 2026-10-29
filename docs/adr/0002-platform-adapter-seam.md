@@ -23,3 +23,9 @@ accepted
 ## 备选方案（关键）
 - **动态加载的插件框架（运行时注册、独立打包）**：MV3 禁止远程代码，且只有一个平台时这是纯成本 → 放弃（原则：架构收敛，反过度设计）。
 - **每个平台各写一套抓取 + 报告**：缓存、退避、增量逻辑会被复制 N 份 → 放弃。
+
+## 修订 2026-10-10：写能力（点赞 / 回复）
+评论区从只读变成可写：接缝补了一个**可选**成员 `writes?: PlatformWrites`（`likeComment` / `replyComment`），只读平台不实现即可，读取路径与只读平台零改动。
+- 写请求与读请求共用同一个 `HttpClient`：`postForm(url, params)` 走同一份 Host/Origin/Referer 改写、同一份风控退避与 HTTP 级错误映射。
+- 凭据（B 站 `bili_jct`）由调用方（内容脚本）在**写执行时**从 `document.cookie` 现读，经 `WriteAuth` 参数进入适配器，只在本层拼进请求体即时使用：适配器自身绝不读 cookie，凭据绝不跨桥、不进日志 / 快照 / 缓存键 / storage / 错误文本（有单测兜底）。
+- `replyComment` 返回归一化的 `Comment`，写路径与读路径共用 `normalize.ts`；B 站端点与参数以 bilibili-API-collect `docs/comment/action.md` 为准（`/x/v2/reply/action`、`/x/v2/reply/add`）。

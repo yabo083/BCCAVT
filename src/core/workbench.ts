@@ -1,10 +1,10 @@
 import { analyzeSubject as buildSubjectReport, analyzeThread as buildThreadReport } from './analysis';
 import { cacheKey } from './cache/types';
 import type { Cache, CacheStats } from './cache/types';
-import { CrawlRunner, PoliteQueue, crawlSubject, crawlThreadPages, defaultSleep, type SleepFn } from './crawl';
+import { CrawlRunner, PoliteQueue, crawlRootsPage, crawlSubject, crawlThreadPages, defaultSleep, type SleepFn } from './crawl';
 import { PlatformError } from './errors';
 import { subjectKey, targetKey } from './model';
-import type { Comment, PlatformId, Session, SubjectRef, Target } from './model';
+import type { Comment, Cursor, PlatformId, Session, SubjectRef, Target } from './model';
 import type { HttpClient, PlatformAdapter } from './platform';
 import { SNAPSHOT_SCHEMA } from './report';
 import type {
@@ -12,6 +12,7 @@ import type {
   CrawlOptions,
   CrawlProgress,
   Forest,
+  RootsPage,
   Snapshot,
   SnapshotSummary,
   SubjectReport,
@@ -167,6 +168,179 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     return { snapshot, forest, report, fromSnapshot };
   }
 
+  /**
+   * 主体抓取的唯一实现。persist 为 false 时只算不存：页面替换的首屏预览天然是截断的，
+   * 一旦写成 latest 快照，整页模式的 cache-first 复用与历史列表都会被它污染。
+   */
+  async function runSubject(
+    ref: SubjectRef,
+    options: CrawlOptions,
+    onProgress: (progress: CrawlProgress) => void,
+    signal: AbortSignal,
+    persist: boolean,
+  ): Promise<AnalysisResult<SubjectReport>> {
+    validateCrawlOptions(options);
+    const adapter = adapterFor(ref.platform);
+    const target: Target = { kind: 'subject', subject: ref };
+    const runner = makeRunner(adapter, signal, onProgress);
+
+    if (options.refresh === 'cache-first') {
+      const existing = await readLatest(target);
+      if (existing !== null && (await canReuseSnapshot(existing, options))) {
+        runner.setPhase('analyze', { fetched: existing.comments.length, declared: existing.completeness.declared });
+        const forest = buildForest(existing.comments);
+        return finish(runner, existing, forest, buildSubjectReport(existing, forest), true);
+      }
+    }
+
+    const startedAt = now();
+    const session = await loadSession(runner);
+    const previous = options.refresh === 'incremental' ? await readLatest(target) : null;
+    const crawled = await crawlSubject(runner, ref, session, options, previous);
+    runner.stats.durationMs = now() - startedAt;
+
+    const fetchedAt = now();
+    const snapshot: Snapshot = {
+      schema: SNAPSHOT_SCHEMA,
+      id: `${targetKey(target)}@${fetchedAt}`,
+      target,
+      subject: crawled.subject,
+      comments: crawled.comments,
+      fetchedAt,
+      auth: session.loggedIn ? 'user' : 'anonymous',
+      completeness: {
+        declared: crawled.declared,
+        fetched: crawled.comments.length,
+        truncated: crawled.truncated,
+        reasons: crawled.reasons,
+      },
+      caps: { maxRoots: options.maxRoots, maxRepliesPerThread: options.maxRepliesPerThread },
+      fetchStats: runner.stats,
+    };
+    if (persist) await persistSnapshot(adapter, snapshot);
+    const forest = buildForest(snapshot.comments);
+    runner.setPhase('analyze', { fetched: snapshot.comments.length, declared: snapshot.completeness.declared });
+    return finish(runner, snapshot, forest, buildSubjectReport(snapshot, forest), false);
+  }
+
+  /** 评论树抓取的唯一实现；persist 的含义同 runSubject。 */
+  async function runThread(
+    ref: SubjectRef,
+    commentId: string,
+    options: CrawlOptions,
+    onProgress: (progress: CrawlProgress) => void,
+    signal: AbortSignal,
+    persist: boolean,
+  ): Promise<AnalysisResult<ThreadReport>> {
+    validateCrawlOptions(options);
+    const adapter = adapterFor(ref.platform);
+    const target: Target = { kind: 'thread', subject: ref, commentId };
+    const runner = makeRunner(adapter, signal, onProgress);
+
+    if (options.refresh === 'cache-first') {
+      const existing = await readLatest(target);
+      if (existing !== null && (await canReuseSnapshot(existing, options))) {
+        runner.setPhase('analyze', { fetched: existing.comments.length, declared: existing.completeness.declared });
+        const forest = buildForest(existing.comments);
+        return finish(runner, existing, forest, buildThreadReport(existing, forest, commentId), true);
+      }
+      // 只有 cache-first 才允许用主体快照派生；full / incremental 一律回源，避免复用陈旧的主体快照。
+      const subjectSnapshot = await readLatest({ kind: 'subject', subject: ref });
+      if (subjectSnapshot !== null) {
+        const derived = deriveThreadSnapshot(subjectSnapshot, target, commentId, options, now());
+        if (derived !== null) {
+          runner.setPhase('analyze', { fetched: derived.comments.length, declared: derived.completeness.declared });
+          const forest = buildForest(derived.comments);
+          return finish(runner, derived, forest, buildThreadReport(derived, forest, commentId), true);
+        }
+      }
+    }
+
+    const startedAt = now();
+    const session = await loadSession(runner);
+    const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
+    runner.setPhase('subject', {});
+    const subject = await runner.load(cacheKey('meta', subjectKey(ref)), 'meta', (ctx) => adapter.getSubject(ref, ctx), {
+      force: options.refresh === 'full',
+    });
+    runner.setPhase('threads', { threadsTotal: 1, threadsDone: 0 });
+    const crawled = await crawlThreadPages(
+      runner,
+      subject,
+      commentId,
+      options.maxRepliesPerThread,
+      options.refresh === 'cache-first',
+      account,
+    );
+    runner.stats.durationMs = now() - startedAt;
+
+    // 适配器为了拓扑可能抓了整棵包含它的根评论树；这里只保留「被选中的评论 + 它的后代」。
+    const containingRoot = crawled.root;
+    if (containingRoot === undefined) throw new PlatformError('protocol', `评论树 ${commentId} 的首页没有返回根评论`);
+    const scoped = scopeThread([containingRoot, ...crawled.comments], commentId);
+    if (scoped === null) throw new PlatformError('not-found', `评论 ${commentId} 不存在或已被删除`);
+    const { focus, comments } = scoped;
+
+    const fetchedReplies = crawled.comments.length;
+    const sourceComplete = !crawled.truncated && fetchedReplies >= containingRoot.replyCount;
+    const reasons: string[] = [];
+    if (crawled.truncated) reasons.push(`达到单树回复上限 ${options.maxRepliesPerThread}`);
+    else if (!sourceComplete) reasons.push(`平台声明 ${containingRoot.replyCount} 条回复，实际抓取 ${fetchedReplies} 条`);
+    if (reasons.length > 0) {
+      for (const limitation of session.limitations) {
+        if (!reasons.includes(limitation)) reasons.push(limitation);
+      }
+    }
+
+    const fetchedAt = now();
+    const snapshot: Snapshot = {
+      schema: SNAPSHOT_SCHEMA,
+      id: `${targetKey(target)}@${fetchedAt}`,
+      target,
+      subject,
+      rootId: focus.id,
+      comments,
+      fetchedAt,
+      auth: session.loggedIn ? 'user' : 'anonymous',
+      completeness: {
+        // 只有被选中的评论本身是顶层评论时，平台的 replyCount 才代表它的后代总数；楼中楼恒为 0 表示「未知」。
+        declared: focus.rootId === null ? focus.replyCount + 1 : undefined,
+        fetched: comments.length,
+        truncated: reasons.length > 0,
+        reasons,
+      },
+      caps: { maxRoots: options.maxRoots, maxRepliesPerThread: options.maxRepliesPerThread },
+      fetchStats: runner.stats,
+    };
+    if (persist) await persistSnapshot(adapter, snapshot);
+    const forest = buildForest(snapshot.comments);
+    runner.setPhase('analyze', { fetched: snapshot.comments.length, declared: snapshot.completeness.declared });
+    return finish(runner, snapshot, forest, buildThreadReport(snapshot, forest, commentId), false);
+  }
+
+  /**
+   * 页面替换阅读器的一页入口：只取一页顶层评论（含该页根评论的楼中楼预览），不落快照。
+   * 与 runSubject 的区别是没有「快照复用」那一段——游标本就来自调用方，每次都按它取一页；
+   * 上限校验、平台解析、账号隔离与礼貌队列全部沿用同一条路径。
+   */
+  async function runRootsPage(
+    ref: SubjectRef,
+    cursor: Cursor | null,
+    options: CrawlOptions,
+    onProgress: (progress: CrawlProgress) => void,
+    signal: AbortSignal,
+  ): Promise<RootsPage> {
+    validateCrawlOptions(options);
+    const adapter = adapterFor(ref.platform);
+    const runner = makeRunner(adapter, signal, onProgress);
+    const startedAt = now();
+    const session = await loadSession(runner);
+    const page = await crawlRootsPage(runner, ref, session, cursor, options);
+    runner.stats.durationMs = now() - startedAt;
+    runner.setPhase('done', { fetched: page.comments.length, declared: page.declared });
+    return page;
+  }
+
   return {
     adapters,
 
@@ -186,147 +360,27 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       return runner.load(cacheKey('session', adapter.id), 'session', (ctx) => adapter.getSession(ctx), { force: true });
     },
 
-    async analyzeSubject(
-      ref: SubjectRef,
-      options: CrawlOptions,
-      onProgress: (progress: CrawlProgress) => void,
-      signal: AbortSignal,
-    ): Promise<AnalysisResult<SubjectReport>> {
-      validateCrawlOptions(options);
-      const adapter = adapterFor(ref.platform);
-      const target: Target = { kind: 'subject', subject: ref };
-      const runner = makeRunner(adapter, signal, onProgress);
-
-      if (options.refresh === 'cache-first') {
-        const existing = await readLatest(target);
-        if (existing !== null && (await canReuseSnapshot(existing, options))) {
-          runner.setPhase('analyze', { fetched: existing.comments.length, declared: existing.completeness.declared });
-          const forest = buildForest(existing.comments);
-          return finish(runner, existing, forest, buildSubjectReport(existing, forest), true);
-        }
-      }
-
-      const startedAt = now();
-      const session = await loadSession(runner);
-      const previous = options.refresh === 'incremental' ? await readLatest(target) : null;
-      const crawled = await crawlSubject(runner, ref, session, options, previous);
-      runner.stats.durationMs = now() - startedAt;
-
-      const fetchedAt = now();
-      const snapshot: Snapshot = {
-        schema: SNAPSHOT_SCHEMA,
-        id: `${targetKey(target)}@${fetchedAt}`,
-        target,
-        subject: crawled.subject,
-        comments: crawled.comments,
-        fetchedAt,
-        auth: session.loggedIn ? 'user' : 'anonymous',
-        completeness: {
-          declared: crawled.declared,
-          fetched: crawled.comments.length,
-          truncated: crawled.truncated,
-          reasons: crawled.reasons,
-        },
-        caps: { maxRoots: options.maxRoots, maxRepliesPerThread: options.maxRepliesPerThread },
-        fetchStats: runner.stats,
-      };
-      await persistSnapshot(adapter, snapshot);
-      const forest = buildForest(snapshot.comments);
-      runner.setPhase('analyze', { fetched: snapshot.comments.length, declared: snapshot.completeness.declared });
-      return finish(runner, snapshot, forest, buildSubjectReport(snapshot, forest), false);
+    /** 整页 / 侧栏入口：结果落快照（历史与 cache-first 复用都依赖它）。 */
+    analyzeSubject(ref, options, onProgress, signal) {
+      return runSubject(ref, options, onProgress, signal, true);
     },
 
-    async analyzeThread(
-      ref: SubjectRef,
-      commentId: string,
-      options: CrawlOptions,
-      onProgress: (progress: CrawlProgress) => void,
-      signal: AbortSignal,
-    ): Promise<AnalysisResult<ThreadReport>> {
-      validateCrawlOptions(options);
-      const adapter = adapterFor(ref.platform);
-      const target: Target = { kind: 'thread', subject: ref, commentId };
-      const runner = makeRunner(adapter, signal, onProgress);
+    analyzeThread(ref, commentId, options, onProgress, signal) {
+      return runThread(ref, commentId, options, onProgress, signal, true);
+    },
 
-      if (options.refresh === 'cache-first') {
-        const existing = await readLatest(target);
-        if (existing !== null && (await canReuseSnapshot(existing, options))) {
-          runner.setPhase('analyze', { fetched: existing.comments.length, declared: existing.completeness.declared });
-          const forest = buildForest(existing.comments);
-          return finish(runner, existing, forest, buildThreadReport(existing, forest, commentId), true);
-        }
-        // 只有 cache-first 才允许用主体快照派生；full / incremental 一律回源，避免复用陈旧的主体快照。
-        const subjectSnapshot = await readLatest({ kind: 'subject', subject: ref });
-        if (subjectSnapshot !== null) {
-          const derived = deriveThreadSnapshot(subjectSnapshot, target, commentId, options, now());
-          if (derived !== null) {
-            runner.setPhase('analyze', { fetched: derived.comments.length, declared: derived.completeness.declared });
-            const forest = buildForest(derived.comments);
-            return finish(runner, derived, forest, buildThreadReport(derived, forest, commentId), true);
-          }
-        }
-      }
+    /** 页面替换阅读器入口：只算不存，绝不写 latest 指针与历史。 */
+    previewSubject(ref, options, onProgress, signal) {
+      return runSubject(ref, options, onProgress, signal, false);
+    },
 
-      const startedAt = now();
-      const session = await loadSession(runner);
-      const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
-      runner.setPhase('subject', {});
-      const subject = await runner.load(cacheKey('meta', subjectKey(ref)), 'meta', (ctx) => adapter.getSubject(ref, ctx), {
-        force: options.refresh === 'full',
-      });
-      runner.setPhase('threads', { threadsTotal: 1, threadsDone: 0 });
-      const crawled = await crawlThreadPages(
-        runner,
-        subject,
-        commentId,
-        options.maxRepliesPerThread,
-        options.refresh === 'cache-first',
-        account,
-      );
-      runner.stats.durationMs = now() - startedAt;
+    /** 页面替换阅读器的逐页入口：按游标取一页，同样只算不存。 */
+    previewRootsPage(ref, cursor, options, onProgress, signal) {
+      return runRootsPage(ref, cursor, options, onProgress, signal);
+    },
 
-      // 适配器为了拓扑可能抓了整棵包含它的根评论树；这里只保留「被选中的评论 + 它的后代」。
-      const containingRoot = crawled.root;
-      if (containingRoot === undefined) throw new PlatformError('protocol', `评论树 ${commentId} 的首页没有返回根评论`);
-      const scoped = scopeThread([containingRoot, ...crawled.comments], commentId);
-      if (scoped === null) throw new PlatformError('not-found', `评论 ${commentId} 不存在或已被删除`);
-      const { focus, comments } = scoped;
-
-      const fetchedReplies = crawled.comments.length;
-      const sourceComplete = !crawled.truncated && fetchedReplies >= containingRoot.replyCount;
-      const reasons: string[] = [];
-      if (crawled.truncated) reasons.push(`达到单树回复上限 ${options.maxRepliesPerThread}`);
-      else if (!sourceComplete) reasons.push(`平台声明 ${containingRoot.replyCount} 条回复，实际抓取 ${fetchedReplies} 条`);
-      if (reasons.length > 0) {
-        for (const limitation of session.limitations) {
-          if (!reasons.includes(limitation)) reasons.push(limitation);
-        }
-      }
-
-      const fetchedAt = now();
-      const snapshot: Snapshot = {
-        schema: SNAPSHOT_SCHEMA,
-        id: `${targetKey(target)}@${fetchedAt}`,
-        target,
-        subject,
-        rootId: focus.id,
-        comments,
-        fetchedAt,
-        auth: session.loggedIn ? 'user' : 'anonymous',
-        completeness: {
-          // 只有被选中的评论本身是顶层评论时，平台的 replyCount 才代表它的后代总数；楼中楼恒为 0 表示「未知」。
-          declared: focus.rootId === null ? focus.replyCount + 1 : undefined,
-          fetched: comments.length,
-          truncated: reasons.length > 0,
-          reasons,
-        },
-        caps: { maxRoots: options.maxRoots, maxRepliesPerThread: options.maxRepliesPerThread },
-        fetchStats: runner.stats,
-      };
-      await persistSnapshot(adapter, snapshot);
-      const forest = buildForest(snapshot.comments);
-      runner.setPhase('analyze', { fetched: snapshot.comments.length, declared: snapshot.completeness.declared });
-      return finish(runner, snapshot, forest, buildThreadReport(snapshot, forest, commentId), false);
+    previewThread(ref, commentId, options, onProgress, signal) {
+      return runThread(ref, commentId, options, onProgress, signal, false);
     },
 
     async history(): Promise<SnapshotSummary[]> {

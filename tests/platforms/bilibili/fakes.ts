@@ -97,25 +97,47 @@ export function createMemoryCache(options: { now?: () => number } = {}): Cache {
   return cache;
 }
 
+/** 一次写请求：URL 与解码后的表单参数（csrf 就在这里，测试据此断言它只进请求体）。 */
+export interface StubPost {
+  url: string;
+  params: Record<string, string>;
+}
+
 export interface StubHttp {
   http: HttpClient;
-  /** 依次记录收到的请求 URL。 */
+  /** 依次记录收到的 GET 请求 URL。 */
   urls: string[];
+  /** 依次记录收到的表单 POST 请求。 */
+  posts: StubPost[];
+  /** 写请求的响应（缺省回车给同一个 handler）；返回 Error 则抛出。 */
+  onPost?: (post: StubPost) => unknown;
 }
 
 /** handler 返回响应 JSON；返回 Error 则抛出（模拟传输层失败）。 */
 export function createStubHttp(handler: (url: string) => unknown): StubHttp {
   const urls: string[] = [];
-  const http: HttpClient = {
-    async getJson<T>(request: HttpRequest, signal: AbortSignal): Promise<T> {
-      urls.push(request.url);
-      if (signal.aborted) throw new PlatformError('aborted', '请求已取消', { platform: 'bilibili' });
-      const result = handler(request.url);
-      if (result instanceof Error) throw result;
-      return result as T;
+  const posts: StubPost[] = [];
+  const stub: StubHttp = {
+    urls,
+    posts,
+    http: {
+      async getJson<T>(request: HttpRequest, signal: AbortSignal): Promise<T> {
+        urls.push(request.url);
+        if (signal.aborted) throw new PlatformError('aborted', '请求已取消', { platform: 'bilibili' });
+        const result = handler(request.url);
+        if (result instanceof Error) throw result;
+        return result as T;
+      },
+      async postForm(url: string, params: Record<string, string>): Promise<unknown> {
+        const post: StubPost = { url, params };
+        posts.push(post);
+        const result = stub.onPost === undefined ? handler(url) : stub.onPost(post);
+        if (result instanceof Error) throw result;
+        return result;
+      },
     },
   };
-  return { http, urls };
+  return stub;
 }
 
 /** nav 响应：给定图片文件名生成 wbi_img（图片名即 WBI 密钥来源）。 */

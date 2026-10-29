@@ -72,7 +72,7 @@ const remainingMs = computed(() => Math.max(0, waitingUntil - nowTick.value));
 </script>
 
 <template>
-  <section v-if="state.run" class="card run" aria-live="polite">
+  <section v-if="state.run" class="run" aria-live="polite">
     <div class="row between wrap">
       <span class="row small">
         <IconCircleNotch class="spinner run-icon" />
@@ -118,7 +118,7 @@ const remainingMs = computed(() => Math.max(0, waitingUntil - nowTick.value));
     </details>
   </section>
 
-  <section v-else-if="state.runError" class="card failure" role="alert">
+  <section v-else-if="state.runError" class="failure" role="alert">
     <div class="row">
       <IconWarningCircle class="failure-icon" />
       <strong>抓取失败</strong>
@@ -210,6 +210,8 @@ const remainingMs = computed(() => Math.max(0, waitingUntil - nowTick.value));
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
   background: var(--error-bg);
 }
 

@@ -18,6 +18,26 @@ export type PlatformErrorKind =
   /** 调用方主动取消。 */
   | 'aborted';
 
+/** 全部合法类别；用 Record 保证与上面的联合类型同步（少一个就编译不过）。 */
+const ERROR_KINDS: Record<PlatformErrorKind, true> = {
+  'auth-required': true,
+  'rate-limited': true,
+  'not-found': true,
+  unavailable: true,
+  'invalid-input': true,
+  network: true,
+  protocol: true,
+  aborted: true,
+};
+
+/**
+ * 运行期守卫：类别跨世界传输（读桥把失败类别回投给 iframe）后入站必须自证是已知类别，
+ * 未知一律由调用方按自己的兜底处理，绝不拿字符串去当类别用。
+ */
+export function isPlatformErrorKind(value: unknown): value is PlatformErrorKind {
+  return typeof value === 'string' && Object.hasOwn(ERROR_KINDS, value);
+}
+
 const RETRYABLE: Partial<Record<PlatformErrorKind, true>> = { 'rate-limited': true, network: true };
 
 export class PlatformError extends Error {

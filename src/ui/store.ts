@@ -17,10 +17,11 @@ import type {
   ThreadReport,
 } from '@/core/report';
 import type { SubjectInsight, ThreadDiagnosis } from '@/ai/types';
-import { INTENT_KEY } from '@/extension/messages';
-import type { IntentSurface, OpenTargetIntent, UiIntent } from '@/extension/messages';
+import { INTENT_KEY, LOCATE_COMMENT, isLocateCommentResponse } from '@/extension/messages';
+import type { IntentSurface, LocateCommentRequest, OpenTargetIntent, UiIntent } from '@/extension/messages';
 import { ai, ensureHeaderRules, workbench } from './services';
 import { loadCrawlOptions, saveCrawlOptions } from './prefs';
+import { surfaceOf } from './surface';
 
 export type View = 'target' | 'subject' | 'explorer' | 'thread' | 'ai' | 'history';
 
@@ -50,10 +51,18 @@ export function describeError(error: unknown): string {
   return String(error);
 }
 
+/**
+ * 承载面（侧栏面板 / 整页工作台 / 图谱窗口）在模块加载时就定下来：文档的 `?view=` 不会中途变，
+ * 而 init() 是异步的——晚一拍就已经把顶栏和视图切换渲染进图谱窗口了。
+ */
+const surface = surfaceOf(new URLSearchParams(location.search));
+
 export const state = reactive({
   view: 'target' as View,
   /** 整页模式：CSS 走两栏布局。 */
-  wide: false,
+  wide: surface === 'tab',
+  /** 图谱窗口（页面评论行放大镜打开）：整窗只有力导向图，不渲染顶栏/输入/视图切换/详情栏。 */
+  graphOnly: surface === 'graph',
   input: '',
   inputError: null as string | null,
   /** 当前活动标签页里的 Bilibili 链接。 */
@@ -199,6 +208,28 @@ export function openComment(commentId: string): void {
   void startThread(commentId);
 }
 
+/**
+ * 把某条评论定位到它的 B 站视频页评论区（详情卡的「在评论区定位」）：请求交后台——
+ * 由它按视频身份找到已打开的标签页并转发给内容脚本，没找到就记下待办再新开一个。
+ *
+ * 定位是尽力而为的跳转：成功不打扰用户，失败只写一条提示，工作台里已有的分析一概不动。
+ */
+export async function locateInReader(input: string, commentId: string): Promise<void> {
+  const request: LocateCommentRequest = { type: LOCATE_COMMENT, input, commentId };
+  let response: unknown;
+  try {
+    response = await chrome.runtime.sendMessage(request);
+  } catch (error) {
+    state.notice = { text: describeError(error), tone: 'error' };
+    return;
+  }
+  if (!isLocateCommentResponse(response)) {
+    state.notice = { text: '无法在评论区定位这条评论', tone: 'error' };
+    return;
+  }
+  if (!response.ok) state.notice = { text: response.error, tone: 'error' };
+}
+
 export function updateOptions(patch: Partial<CrawlOptions>): void {
   state.options = { ...state.options, ...patch };
   void saveCrawlOptions(state.options);
@@ -243,16 +274,6 @@ export function openLoginPage(): void {
   void chrome.tabs.create({ url: 'https://passport.bilibili.com/login' });
 }
 
-/** 在新标签页打开整页视图，带上当前状态。 */
-export function openInTab(): void {
-  const url = new URL(location.href);
-  url.search = '';
-  url.searchParams.set('view', 'tab');
-  const input = state.input.trim();
-  if (input) url.searchParams.set('input', input);
-  if (state.selectedCommentId) url.searchParams.set('comment', state.selectedCommentId);
-  void chrome.tabs.create({ url: url.toString() });
-}
 
 // ───────────────────────── AI ─────────────────────────
 
@@ -392,7 +413,7 @@ async function resolveIntentWindowId(): Promise<void> {
   }
 }
 
-/** 整页模式下的 ?input=…&comment=…：直接开跑，结果通常直接命中缓存。 */
+/** 整页工作台与图谱窗口共用的 ?input=…&comment=…：直接开跑，结果通常直接命中缓存。 */
 async function applyInitialQuery(): Promise<boolean> {
   const params = new URLSearchParams(location.search);
   const input = params.get('input')?.trim();
@@ -405,19 +426,25 @@ async function applyInitialQuery(): Promise<boolean> {
 }
 
 export async function init(): Promise<void> {
-  state.wide = new URLSearchParams(location.search).get('view') === 'tab';
-  intentSurface = state.wide ? 'full-tab' : 'side-panel';
-  watchIntentStorage();
-  await resolveIntentWindowId();
+  const params = new URLSearchParams(location.search);
+  // 图谱窗口由 URL 上的 input/comment 驱动，不参与意图分发：它不该抢走本该在侧栏/整页打开的分析。
+  if (!state.graphOnly) {
+    intentSurface = state.wide ? 'full-tab' : 'side-panel';
+    watchIntentStorage();
+    await resolveIntentWindowId();
+  }
   // 先确保后台已装好 DNR 请求头改写规则，再发起任何网络请求
   await ensureHeaderRules();
   state.options = await loadCrawlOptions();
   void loadSession();
   void refreshHistory();
   void suggestFromActiveTab();
-  if (!(await applyInitialQuery())) await readStoredIntent();
+  if (!(await applyInitialQuery()) && !state.graphOnly) await readStoredIntent();
   intentsReady = true;
   await flushQueuedIntents();
+  if (params.get('entry') === 'panel-gesture') {
+    state.notice = { tone: 'info', text: '浏览器未授权这次侧栏打开操作，已在此标签页继续同一分析。侧栏仍可通过工具栏的 Loupe 图标打开。' };
+  }
 }
 
 /** 活动标签页若是 Bilibili 目标就作为输入建议。 */

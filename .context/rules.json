@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "docRoots": [
+    "AGENTS.md",
+    "README.md",
+    "roadmap.md",
+    "docs/**/*.md",
+    ".context/**/*.md",
+    "src/**/README.md",
+    "tests/**/*.md"
+  ],
+  "extensions": ["ts", "tsx", "vue", "mjs", "js", "json", "md", "html", "css"],
+  "git": {
+    "bases": ["HEAD", "origin/main", "HEAD~1"],
+    "sourceDirs": ["src/"],
+    "testDirs": ["tests/"]
+  },
+  "rules": [
+    {
+      "id": "core",
+      "name": "核心领域层 (Core / Crawl / Snapshot / Workbench)",
+      "match": ["src/core/**"],
+      "docs": [
+        "src/core/README.md",
+        "docs/adr/0002-platform-adapter-seam.md",
+        "docs/adr/0003-reader-infinite-scroll.md"
+      ],
+      "specs": ["tests/test-suite.md (CORE-01 ~ CORE-04 抓取、风控与快照规格)"],
+      "traps": [
+        "「到底」判据：`next === null` 是到底的唯一权威判据，严禁以请求返回更少条数推断。",
+        "账号隔离：页缓存键必须包含 account（`u:<id>` vs `anon`），混用会将匿名截断数据喂给已登录用户。",
+        "内存隔离：工作台用磁盘持久化，页面阅读器只用内存缓存（`createMemoryCache`），绝不落盘。"
+      ]
+    },
+    {
+      "id": "extension",
+      "name": "扩展与内容脚本 (Extension / Content Scripts / Injection)",
+      "match": ["src/extension/**"],
+      "docs": ["src/extension/README.md", "docs/architecture/01-context.md"],
+      "specs": [
+        "tests/test-suite.md (INJ-01 ~ INJ-03 注入门限与生命周期规格)",
+        "tests/test-suite.md (RDR-01 ~ RDR-05 跨界通信与状态规格)"
+      ],
+      "traps": [
+        "🚨 两道门铁律：写 DOM 前必须通过 window load + !document.querySelector(\"[data-server-rendered]\") 两道门，水合前插节点会导致 B 站 Vue SSR hydration 失配、顶部 header 变空！",
+        "🚨 DOM 还原：只写原生评论根的 display 并保存原值，离开或扩展重载必须恢复原值，绝不碰 #biliMainHeader 等外部祖先。",
+        "🚨 双世界隔离：主世界读 DOM 自定义元素数据，隔离世界调 chrome.* API，二者不共享堆。",
+        "🚨 扩展重载熔断：扩展更新/重载后 chrome.* 全部失效，阅读器必须立即熔断、还原并停止 MutationObserver。"
+      ]
+    },
+    {
+      "id": "ui",
+      "name": "用户界面与嵌入阅读器 (UI / Vue / Infinite Scroll)",
+      "match": ["src/ui/**"],
+      "docs": ["src/ui/README.md", "docs/adr/0003-reader-infinite-scroll.md"],
+      "specs": ["tests/test-suite.md (SCROLL-01 ~ SCROLL-04 视口滚动与高度上报规格)"],
+      "traps": [
+        "高度单调性：已提交高度不缩（allowShrink 仅在结构性缩高时允许），否则宿主文档变矮会导致浏览器强制钳回 scrollTop 引起剧烈页面跳动/回弹。",
+        "视口边沿触发：宿主推视口消息时，必须通过 armed 保证同一到底区间只请求一次，避免无限高频回源。",
+        "零虚拟化：阅读器不做虚拟列表，长正文按自然高度渲染，大树依赖分批挂载 + 折叠限流。"
+      ]
+    },
+    {
+      "id": "platforms",
+      "name": "平台适配器 (Platforms / Bilibili)",
+      "match": ["src/platforms/**"],
+      "docs": ["src/core/README.md (平台接缝段)", "docs/adr/0002-platform-adapter-seam.md"],
+      "specs": ["tests/test-suite.md (CORE-01 匿名上限与完整度规格)"],
+      "traps": [
+        "鉴权无留存：平台适配器只处理输入解析与数据归一化，Cookie/CSRF 现读现用，绝不跨桥、不留存、不导出。"
+      ]
+    }
+  ]
+}

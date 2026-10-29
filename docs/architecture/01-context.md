@@ -4,7 +4,7 @@ Loupe · 评鉴是一个 Chrome MV3 扩展：在用户自己的浏览器身份�
 
 ```mermaid
 flowchart LR
-  user([用户]) -->|侧边栏 / 整页| ext[Loupe · 评鉴]
+  user([用户]) -->|工具栏弹窗 / 整页| ext[Loupe · 评鉴]
   ext -->|HTTPS + 浏览器 Cookie<br/>Origin/Referer 由 DNR 改写| bili[(Bilibili Web API)]
   ext -->|OpenAI 兼容 /chat/completions<br/>用户自配密钥| llm[(LLM 端点)]
   ext <-->|IndexedDB / chrome.storage| store[(本机存储)]
@@ -13,8 +13,8 @@ flowchart LR
 
 | 外部实体 | 方向 | 接口 | 说明 |
 |---|---|---|---|
-| Bilibili Web API `api.bilibili.com` | 出 | HTTPS JSON；WBI 签名；Cookie 随请求（`credentials: include`） | `nav`（登录态 + WBI 密钥）、`web-interface/view`（视频元数据）、`v2/reply/wbi/main`（顶层评论，按时间游标）、`v2/reply/detail`（评论树，游标，匿名可完整翻页）。扩展发出的请求带 `Origin: chrome-extension://…` 会被 412 风控，后台用 declarativeNetRequest 会话规则改写 Origin/Referer，仅作用于扩展自身发起的请求。 |
-| B 站页面（`www.bilibili.com`） | 入 | 内容脚本（主世界 + 隔离世界）→ `runtime.sendMessage` | 在播放器下方工具栏操作行与每条评论的操作行里注入一键分析按钮（点击在手势里同步上报，站点 hydration 完成后才注入），以及右键命中的评论 id；不抓 DOM 数据。 |
+| Bilibili Web API `api.bilibili.com` | 出 | HTTPS JSON；WBI 签名；Cookie 随请求（`credentials: include`） | `nav`（登录态 + WBI 密钥）、`web-interface/view`（视频元数据）、`v2/reply/wbi/main`（顶层评论，按时间游标）、`v2/reply/detail`（评论树，游标，匿名可完整翻页）。写操作只有两条表单 POST：`v2/reply/action`（点赞 / 取消）与 `v2/reply/add`（发评 / 回复），由内容脚本在 B 站页面上下文发出（Cookie 与 Origin 都属于页面），CSRF 在写执行点现读、只进请求体。扩展页自身发出的请求带 `Origin: chrome-extension://…` 会被 412 风控，后台用 declarativeNetRequest 会话规则改写 Origin/Referer，仅作用于扩展自身发起的请求。 |
+| B 站页面（`www.bilibili.com`） | 入 | 内容脚本（主世界 + 隔离世界）→ `runtime.sendMessage` | 在播放器下方工具栏操作行与每条评论的操作行里注入一键分析按钮（点击在手势里同步上报；**站点首次挂载结束前一个页面节点都不写**——窗口 load 与「文档里再无 `data-server-rendered` 水合标记」两道门都过才注入，理由见 roadmap「header 变空」一节），以及右键命中的评论 id；不抓 DOM 数据。页面开关开启时隔离世界进入替换模式：隐藏原生评论根、在原位挂载扩展内嵌的自绘阅读器（只写原生根的 `display`，绝不碰页头与评论区祖先），阅读器的写意图经窗口桥交回内容脚本在页面上下文执行。 |
 | LLM 端点（用户配置） | 出 | OpenAI 兼容 `POST {baseUrl}/chat/completions`，SSE 流式 | 可选；密钥存 `chrome.storage.local`，运行时按需申请该源的可选主机权限。 |
 | 本机存储 | 双向 | IndexedDB（缓存、快照）、`chrome.storage.local`（设置）、`chrome.storage.session`（意图、右键评论） | 缓存只是优化：IndexedDB 不可用时降级为内存 + 回源。 |
 

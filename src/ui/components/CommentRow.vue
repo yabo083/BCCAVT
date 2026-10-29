@@ -5,6 +5,7 @@ import IconThumbsUp from '~icons/ph/thumbs-up';
 import IconMapPin from '~icons/ph/map-pin';
 import IconArrowBendDownRight from '~icons/ph/arrow-bend-down-right';
 import AuthorChip from './AuthorChip.vue';
+import CommentText from './CommentText.vue';
 import { formatCount, formatRelative } from '../format';
 import type { Comment } from '@/core/model';
 
@@ -41,7 +42,7 @@ const emit = defineEmits<{ select: [id: string]; 'open-thread': [id: string] }>(
       </span>
     </header>
 
-    <p class="text">{{ props.comment.text }}</p>
+    <p class="text"><CommentText :text="props.comment.text" :emotes="props.comment.emotes" /></p>
 
     <footer v-if="props.threadAction || (props.replies ?? 0) > 0" class="row wrap foot">
       <span v-if="(props.replies ?? 0) > 0" class="chip tnum">

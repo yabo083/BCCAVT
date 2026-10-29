@@ -3,30 +3,23 @@
  * 重试、退避、并发由引擎按 politeness 执行，这里只负责协议本身。
  */
 import { PlatformError } from '../../core/errors';
+import { createHttpClient } from '../../core/http';
 import type { Comment, Cursor, Page, Subject, SubjectRef, ThreadPage } from '../../core/model';
 import type { FetchContext, PlatformAdapter } from '../../core/platform';
 import {
+  createBilibiliWrites,
   fetchRootPage,
   fetchSession,
   fetchThreadPage,
   fetchVideoView,
+  locatorOf,
   type RawThreadPage,
-  type SubjectLocator,
 } from './api';
 import { normalizeReply, rawRootId } from './normalize';
 import { parseTarget } from './url';
 import { asRecord, strField } from './raw';
 
 const LOCATOR_TYPE_VIDEO = 1;
-
-function locatorOf(subject: Subject): SubjectLocator {
-  const oid = subject.locator['oid'];
-  const type = subject.locator['type'];
-  if ((typeof oid !== 'string' && typeof oid !== 'number') || typeof type !== 'number') {
-    throw new PlatformError('protocol', '主体缺少 oid/type 定位参数，请重新解析主体', { platform: 'bilibili' });
-  }
-  return { oid: String(oid), type };
-}
 
 async function getSubject(ref: SubjectRef, ctx: FetchContext): Promise<Subject> {
   if (ref.kind !== 'video') {
@@ -136,4 +129,7 @@ export const bilibiliAdapter: PlatformAdapter = {
   getSubject,
   listRoots,
   listThread,
+  // 写请求也走同一套传输层（带 Cookie、同一份 Origin/Referer 改写与风控退避）：
+  // 内容脚本拿到这个实例后，用内容脚本上下文的 fetch 发出请求。
+  writes: createBilibiliWrites(createHttpClient()),
 };

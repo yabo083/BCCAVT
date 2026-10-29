@@ -451,7 +451,7 @@ describe('快照索引', () => {
     await workbench.clearCache();
     expect(await workbench.cacheUsage()).toEqual({ entries: 0, bytes: 0 });
     expect(workbench.cacheStats().loads).toBeGreaterThan(0);
-    expect(await cache.keys('v1|')).toEqual([]);
+    expect(await cache.keys('')).toEqual([]);
   });
 
   it('resolve 交给适配器解析', () => {

@@ -1,17 +1,29 @@
 <script setup lang="ts">
 /**
- * 单棵评论树：水平 tidy tree（d3-hierarchy），有立场诊断时按立场着色、否则按层级；
- * 折叠状态由父组件持有（受控组件），这里只负责布局、绘制、命中与缩放平移。
+ * 单棵评论树：纵向缩进树——父在上、直接回复在下一层，缩进线画出分支。
+ * 节点主标签是作者名（头像 + 昵称 + 等级），正文只在 hover 悬浮层与选中详情里完整出现。
+ * 工具条全部是 Phosphor icon-only 控件（aria-label + title），缩放读数只是状态文本。
+ * 视口尺寸完全由 CSS 决定（内容层 absolute inset 0 + 定高窗口化列表），
+ * 内容再多也不会反过来撑高布局，旧的画布自增长反馈即由此切断。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { hierarchy, tree } from 'd3-hierarchy';
-import { select } from 'd3-selection';
-import { zoom, zoomIdentity } from 'd3-zoom';
-import type { ZoomBehavior } from 'd3-zoom';
-import IconCrosshairSimple from '~icons/ph/crosshair-simple';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import IconArrowBendDownRight from '~icons/ph/arrow-bend-down-right';
 import IconArrowsIn from '~icons/ph/arrows-in';
 import IconArrowsOut from '~icons/ph/arrows-out';
-import { useCanvasTokens, useElementSize } from '../composables/dom';
+import IconCaretDown from '~icons/ph/caret-down';
+import IconCaretRight from '~icons/ph/caret-right';
+import IconCrosshairSimple from '~icons/ph/crosshair-simple';
+import IconFlag from '~icons/ph/flag';
+import IconMagnifyingGlassMinus from '~icons/ph/magnifying-glass-minus';
+import IconMagnifyingGlassPlus from '~icons/ph/magnifying-glass-plus';
+import IconThumbsUp from '~icons/ph/thumbs-up';
+import CommentText from './CommentText.vue';
+import InfoTip from './InfoTip.vue';
+import VirtualList from './VirtualList.vue';
+import { COMPACT_ROW_THRESHOLD, flattenThread } from '../thread';
+import type { ThreadRow } from '../thread';
+import { formatCount, formatDateTime, formatRelative } from '../format';
+import { scrollTopForIndex } from '../virtual';
 import type { CommentNode, Forest } from '@/core/report';
 import type { ThreadDiagnosis } from '@/ai/types';
 
@@ -33,378 +45,458 @@ const emit = defineEmits<{
   'expand-all': [];
 }>();
 
-const COL = 180;
-const ROW = 26;
-const MINIMAP_WIDTH = 96;
-const MINIMAP_HEIGHT = 132;
-const LABEL_FONT = '11px -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif';
-
-interface Datum {
-  node: CommentNode;
-}
-
-interface Placed {
-  x: number;
-  y: number;
-  depth: number;
-  label: string;
-  hidden: number;
-  node: CommentNode;
-}
+/** 行内度量（未缩放像素）；CSS 用 --s 乘同一批数字，两边必须一致，否则正文会被裁掉。 */
+const LINE_HEIGHT = 24;
+const PREVIEW_LINE_HEIGHT = 18;
+const PREVIEW_LINES = 2;
+const ROW_PADDING = 6;
+/** VirtualList 每行自带 8px 底距，缩进线靠它接续。 */
+const LIST_GAP = 8;
+const INDENT_STEP = 16;
+const MIN_SCALE = 0.85;
+const MAX_SCALE = 1.6;
+const ZOOM_STEP = 1.15;
+const HOVER_DELAY = 180;
 
 const viewport = ref<HTMLElement | null>(null);
-const canvasEl = ref<HTMLCanvasElement | null>(null);
-const minimapEl = ref<HTMLCanvasElement | null>(null);
+const list = ref<InstanceType<typeof VirtualList> | null>(null);
+const scrollEl = ref<HTMLElement | null>(null);
 const tipEl = ref<HTMLElement | null>(null);
-const tipPoint = ref<Placed | null>(null);
-const { width, height } = useElementSize(viewport);
-const tokens = useCanvasTokens();
-
-const transform = ref({ k: 1, x: 0, y: 0 });
-let zoomBehavior: ZoomBehavior<HTMLCanvasElement, unknown> | null = null;
-let frame = 0;
+const scale = ref(1);
+const hoverRow = ref<ThreadRow | null>(null);
+const panning = ref(false);
+const brokenAvatars = reactive(new Set<string>());
 
 const threadRoot = computed<CommentNode | null>(() => {
   const byRootId = props.rootId ? props.forest.byId.get(props.rootId) : undefined;
   return byRootId ?? props.forest.roots[0] ?? null;
 });
 
-const layout = computed(() => {
-  const root = threadRoot.value;
-  const empty = { nodes: [] as Placed[], positions: new Map<string, Placed>(), minX: 0, maxX: 1, minY: 0, maxY: 1 };
-  if (!root) return empty;
+const rows = computed<ThreadRow[]>(() => (threadRoot.value ? flattenThread(threadRoot.value, props.collapsed) : []));
+const activeId = ref<string | null>(props.selectedId ?? props.focusId ?? threadRoot.value?.comment.id ?? null);
+/** 小树给足正文预览，大树只留作者与关系，正文交给悬浮层。 */
+const compact = computed(() => rows.value.length > COMPACT_ROW_THRESHOLD);
+const indentWidth = computed(() => Math.round(INDENT_STEP * scale.value));
+const rowHeight = computed(() =>
+  Math.round(
+    (LINE_HEIGHT + (compact.value ? 0 : PREVIEW_LINES * PREVIEW_LINE_HEIGHT) + ROW_PADDING * 2) * scale.value,
+  ),
+);
+const itemHeight = computed(() => rowHeight.value + LIST_GAP);
+const viewportStyle = computed<Record<string, string>>(() => ({ '--s': String(scale.value) }));
+const turningPoints = computed(() => new Set(props.diagnosis?.turningPoints ?? []));
+/** 悬浮层是长正文的唯一完整出口（另一个是选中详情卡），所以这里不做截断，只让它在框内滚动。 */
+const hoverText = computed(() => hoverRow.value?.node.comment.text ?? '');
+/** 回复关系：悬浮层里点名父评论作者，读树时不必反推缩进。 */
+const hoverParentName = computed(() => hoverRow.value?.node.parent?.comment.author.name ?? null);
 
-  const hierarchyRoot = tree<Datum>().nodeSize([ROW, COL])(
-    hierarchy<Datum>({ node: root }, (datum) =>
-      props.collapsed.has(datum.node.comment.id) ? [] : datum.node.children.map((child) => ({ node: child })),
-    ),
-  );
-
-  const nodes: Placed[] = [];
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (const node of hierarchyRoot.descendants()) {
-    minX = Math.min(minX, node.y);
-    maxX = Math.max(maxX, node.y);
-    minY = Math.min(minY, node.x);
-    maxY = Math.max(maxY, node.x);
-    nodes.push({
-      x: node.y,
-      y: node.x,
-      depth: node.depth,
-      label: node.data.node.comment.text.replace(/\s+/g, ' ').slice(0, 22),
-      hidden: props.collapsed.has(node.data.node.comment.id) ? node.data.node.children.length : 0,
-      node: node.data.node,
-    });
-  }
-  return { nodes, positions: new Map(nodes.map((point) => [point.node.comment.id, point])), minX, maxX, minY, maxY };
-});
-
-function nodeColor(id: string, depth: number): string {
-  const diagnosis = props.diagnosis;
-  const palette = tokens.value;
-  if (diagnosis) {
-    const stance = diagnosis.stanceOf[id];
-    if (stance !== undefined) return palette.stances[stance % palette.stances.length]!;
-  }
-  return depth === 0 ? palette.accentStrong : palette.accent;
+/** 立场着色：有诊断按立场，否则根用主色、回复用中性色。 */
+function stanceClass(row: ThreadRow): string {
+  const stance = props.diagnosis?.stanceOf[row.id];
+  if (stance === undefined) return row.depth === 0 ? 'root' : 'plain';
+  return `s${(stance % 6) + 1}`;
 }
 
-function fitTransform(): { k: number; x: number; y: number } {
-  const w = Math.max(1, width.value);
-  const h = Math.max(1, height.value);
-  const { minX, maxX, minY, maxY } = layout.value;
-  const treeWidth = Math.max(1, maxX - minX);
-  const treeHeight = Math.max(1, maxY - minY);
-  const k = Math.min(1, Math.max(0.01, Math.min((w - 48) / treeWidth, (h - 48) / treeHeight)));
-  return { k, x: (w - k * treeWidth) / 2 - k * minX, y: h / 2 - k * (minY + treeHeight / 2) };
+/* ── 缩放与滚动：都在定高窗口化列表上做，不碰布局高度 ── */
+
+function scrollRowIntoView(index: number): void {
+  const el = scrollEl.value;
+  if (!el) return;
+  const top = index * itemHeight.value;
+  const bottom = top + itemHeight.value;
+  if (top < el.scrollTop) el.scrollTop = top;
+  else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
 }
 
-function draw(): void {
-  const canvas = canvasEl.value;
-  const context = canvas?.getContext('2d');
-  if (!canvas || !context) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.max(1, width.value);
-  const h = Math.max(1, height.value);
-  const pixelWidth = Math.round(w * dpr);
-  const pixelHeight = Math.round(h * dpr);
-  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
-  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, w, h);
-
-  const { k, x: originX, y: originY } = transform.value;
-  const palette = tokens.value;
-  const nodes = layout.value.nodes;
-  const labelsVisible = k * ROW >= 16;
-  const pad = 60;
-  const hoveredId = tipPoint.value?.node.comment.id ?? null;
-
-  // 使用真实父节点坐标，避免把跨层回复画成无连接的平行横线。
-  const positions = layout.value.positions;
-  context.beginPath();
-  for (const point of nodes) {
-    if (!point.node.parent) continue;
-    const parent = positions.get(point.node.parent.comment.id);
-    if (!parent) continue;
-    const px = originX + k * parent.x;
-    const py = originY + k * parent.y;
-    const cx = originX + k * point.x;
-    const cy = originY + k * point.y;
-    const bend = (px + cx) / 2;
-    context.moveTo(px, py);
-    context.bezierCurveTo(bend, py, bend, cy, cx, cy);
-  }
-  context.strokeStyle = palette.border;
-  context.lineWidth = 1;
-  context.stroke();
-
-  context.font = LABEL_FONT;
-  for (const point of nodes) {
-    const screenX = originX + k * point.x;
-    const screenY = originY + k * point.y;
-    if (screenX < -pad || screenY < -pad || screenX > w + pad || screenY > h + pad) continue;
-
-    const hovered = point.node.comment.id === hoveredId;
-    const isSelected = point.node.comment.id === props.selectedId;
-    const isFocus = point.node.comment.id === props.focusId;
-    const radius = Math.max(2, Math.min(9, 4 * k + 1.5));
-
-    context.beginPath();
-    context.arc(screenX, screenY, hovered || isSelected ? radius + 2 : radius, 0, Math.PI * 2);
-    context.fillStyle = nodeColor(point.node.comment.id, point.depth);
-    context.fill();
-
-    if (isFocus || isSelected || hovered) {
-      context.beginPath();
-      context.arc(screenX, screenY, radius + 4, 0, Math.PI * 2);
-      context.strokeStyle = isFocus ? palette.accentStrong : palette.fg;
-      context.lineWidth = isFocus ? 2 : 1.5;
-      context.stroke();
-    }
-
-    if (point.hidden > 0) {
-      context.beginPath();
-      context.arc(screenX + radius + 5, screenY - radius - 4, 6.5, 0, Math.PI * 2);
-      context.fillStyle = palette.surface2;
-      context.fill();
-      context.fillStyle = palette.fgMuted;
-      context.textAlign = 'center';
-      context.fillText(String(point.hidden), screenX + radius + 5, screenY - radius - 1);
-    }
-
-    if (labelsVisible || isFocus || isSelected) {
-      context.fillStyle = isSelected || hovered ? palette.fg : palette.fgMuted;
-      context.textAlign = 'left';
-      context.fillText(point.label, screenX + radius + 4, screenY + 3.5, Math.max(24, k * COL - 16));
-    }
-  }
-  drawMinimap();
-}
-
-function drawMinimap(): void {
-  const canvas = minimapEl.value;
-  const context = canvas?.getContext('2d');
-  if (!canvas || !context) return;
-  const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(MINIMAP_WIDTH * dpr);
-  const pixelHeight = Math.round(MINIMAP_HEIGHT * dpr);
-  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
-  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
-
-  const { minX, maxX, minY, maxY, nodes } = layout.value;
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  const scale = Math.min((MINIMAP_WIDTH - 12) / spanX, (MINIMAP_HEIGHT - 12) / spanY);
-  const offsetX = 6 - minX * scale;
-  const offsetY = 6 - minY * scale;
-
-  context.fillStyle = tokens.value.fgSubtle;
-  for (const point of nodes) context.fillRect(offsetX + point.x * scale, offsetY + point.y * scale, 1.4, 1.4);
-
-  const { k, x: originX, y: originY } = transform.value;
-  const left = (0 - originX) / k;
-  const top = (0 - originY) / k;
-  context.strokeStyle = tokens.value.accentStrong;
-  context.lineWidth = 1;
-  context.strokeRect(
-    offsetX + left * scale,
-    offsetY + top * scale,
-    Math.max(2, ((width.value - originX) / k - left) * scale),
-    Math.max(2, ((height.value - originY) / k - top) * scale),
-  );
-}
-
-function scheduleDraw(): void {
-  if (frame) return;
-  frame = requestAnimationFrame(() => {
-    frame = 0;
-    draw();
+function setScale(next: number): void {
+  const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+  if (clamped === scale.value) return;
+  const el = scrollEl.value;
+  const anchor = el ? Math.floor(el.scrollTop / itemHeight.value) : 0;
+  scale.value = clamped;
+  if (!el) return;
+  void nextTick(() => {
+    el.scrollTop = anchor * itemHeight.value;
   });
 }
 
-function pick(clientX: number, clientY: number): Placed | null {
-  const canvas = canvasEl.value;
-  if (!canvas) return null;
-  const rect = canvas.getBoundingClientRect();
-  const pointerX = clientX - rect.left;
-  const pointerY = clientY - rect.top;
-  const { k, x: originX, y: originY } = transform.value;
-  const toleranceX = Math.max(6, (k * COL) / 2);
-  const toleranceY = Math.max(6, (k * ROW) / 2);
+function resetView(): void {
+  scale.value = 1;
+  const anchorId = props.selectedId ?? props.focusId ?? threadRoot.value?.comment.id ?? null;
+  const found = anchorId ? rows.value.findIndex((row) => row.id === anchorId) : 0;
+  const index = found >= 0 ? found : 0;
+  activeId.value = rows.value[index]?.id ?? null;
+  void nextTick(() => {
+    const el = scrollEl.value;
+    if (el) el.scrollTop = scrollTopForIndex(index, itemHeight.value, el.clientHeight);
+  });
+}
 
-  let best: Placed | null = null;
-  let bestDistance = Infinity;
-  for (const point of layout.value.nodes) {
-    const dx = Math.abs(originX + k * point.x - pointerX);
-    const dy = Math.abs(originY + k * point.y - pointerY);
-    if (dx > toleranceX || dy > toleranceY) continue;
-    if (dx + dy < bestDistance) {
-      bestDistance = dx + dy;
-      best = point;
+function moveActive(index: number): void {
+  const target = rows.value[Math.min(rows.value.length - 1, Math.max(0, index))];
+  if (!target) return;
+  activeId.value = target.id;
+  void nextTick(() => scrollRowIntoView(target.index));
+}
+
+/* ── 指针：单击选中、双击折叠、拖拽平移、Ctrl/⌘ + 滚轮缩放 ── */
+
+const pointer = { x: 0, y: 0 };
+const pan = { active: false, moved: false, x: 0, y: 0, left: 0, top: 0 };
+let suppressClick = false;
+let hoverTimer: number | undefined;
+
+function positionTip(): void {
+  const tip = tipEl.value;
+  const host = viewport.value;
+  if (!tip || !host) return;
+  const left = Math.max(4, Math.min(pointer.x + 14, host.clientWidth - tip.offsetWidth - 4));
+  const top = Math.max(4, Math.min(pointer.y + 14, host.clientHeight - tip.offsetHeight - 4));
+  tip.style.transform = `translate(${left}px, ${top}px)`;
+}
+
+function hideHover(): void {
+  window.clearTimeout(hoverTimer);
+  hoverRow.value = null;
+}
+
+function onPointerOver(event: PointerEvent): void {
+  const id = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset.id;
+  if (!id || id === hoverRow.value?.id) return;
+  window.clearTimeout(hoverTimer);
+  hoverRow.value = null;
+  hoverTimer = window.setTimeout(() => {
+    const row = rows.value.find((item) => item.id === id);
+    if (row) {
+      hoverRow.value = row;
+      void nextTick(positionTip);
     }
-  }
-  return best;
+  }, HOVER_DELAY);
+}
+
+function onPointerOut(event: PointerEvent): void {
+  const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-id]');
+  const next = event.relatedTarget as Node | null;
+  if (!target || (next && target.contains(next))) return;
+  hideHover();
+}
+
+function onPointerDown(event: PointerEvent): void {
+  const el = scrollEl.value;
+  if (event.button !== 0 || !el) return;
+  pan.active = true;
+  pan.moved = false;
+  pan.x = event.clientX;
+  pan.y = event.clientY;
+  pan.left = el.scrollLeft;
+  pan.top = el.scrollTop;
+  viewport.value?.setPointerCapture(event.pointerId);
 }
 
 function onPointerMove(event: PointerEvent): void {
-  const canvas = canvasEl.value;
-  if (!canvas) return;
-  const hit = pick(event.clientX, event.clientY);
-  canvas.style.cursor = hit ? 'pointer' : 'grab';
-  if (tipPoint.value?.node.comment.id !== hit?.node.comment.id) {
-    tipPoint.value = hit;
-    scheduleDraw();
+  const host = viewport.value;
+  if (!host) return;
+  const rect = host.getBoundingClientRect();
+  pointer.x = event.clientX - rect.left;
+  pointer.y = event.clientY - rect.top;
+
+  if (pan.active) {
+    const el = scrollEl.value;
+    if (!el) return;
+    const dx = event.clientX - pan.x;
+    const dy = event.clientY - pan.y;
+    if (!pan.moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+    pan.moved = true;
+    panning.value = true;
+    el.scrollLeft = pan.left - dx;
+    el.scrollTop = pan.top - dy;
+    hideHover();
+    return;
   }
-  const tip = tipEl.value;
-  if (tip && hit) {
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.min(Math.max(8, event.clientX - rect.left + 12), Math.max(8, rect.width - 230));
-    const y = Math.min(Math.max(8, event.clientY - rect.top + 12), Math.max(8, rect.height - 70));
-    tip.style.transform = `translate(${x}px, ${y}px)`;
-  }
+  if (!hoverRow.value) return;
+  // 指针已在悬浮层内（它可滚动）时不再跟随，否则悬浮层会追着指针跑。
+  const target = event.target as Node | null;
+  if (target && tipEl.value?.contains(target)) return;
+  positionTip();
 }
 
-function applyTransform(next: { k: number; x: number; y: number }): void {
-  const canvas = canvasEl.value;
-  const behavior = zoomBehavior;
-  if (canvas && behavior) {
-    select(canvas).call(behavior.transform, zoomIdentity.translate(next.x, next.y).scale(next.k));
-  } else {
-    transform.value = next;
-    scheduleDraw();
-  }
+function onPointerUp(event: PointerEvent): void {
+  if (!pan.active) return;
+  suppressClick = pan.moved;
+  pan.active = false;
+  panning.value = false;
+  const host = viewport.value;
+  if (host?.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
 }
 
-function onMinimapClick(event: MouseEvent): void {
-  const canvas = minimapEl.value;
-  if (!canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  const { minX, maxX, minY, maxY } = layout.value;
-  const scale = Math.min(
-    (MINIMAP_WIDTH - 12) / Math.max(1, maxX - minX),
-    (MINIMAP_HEIGHT - 12) / Math.max(1, maxY - minY),
-  );
-  const worldX = minX + (event.clientX - rect.left - 6) / scale;
-  const worldY = minY + (event.clientY - rect.top - 6) / scale;
-  const { k } = transform.value;
-  applyTransform({ k, x: width.value / 2 - k * worldX, y: height.value / 2 - k * worldY });
+function onClickCapture(event: MouseEvent): void {
+  if (!suppressClick) return;
+  suppressClick = false;
+  event.preventDefault();
+  event.stopPropagation();
 }
+
+function onWheel(event: WheelEvent): void {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  setScale(scale.value * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+}
+
+function onRowClick(row: ThreadRow): void {
+  activeId.value = row.id;
+  emit('select', row.id);
+  scrollEl.value?.focus({ preventScroll: true });
+}
+
+function onRowDoubleClick(row: ThreadRow): void {
+  if (row.hasChildren) emit('toggle-collapse', row.id);
+}
+
+/* ── 键盘：容器持有焦点，aria-activedescendant 指向当前行（虚拟列表下不会丢焦点） ── */
 
 function onKeydown(event: KeyboardEvent): void {
-  const step = 48;
-  const { k, x, y } = transform.value;
-  if (event.key === 'ArrowLeft') applyTransform({ k, x: x + step, y });
-  else if (event.key === 'ArrowRight') applyTransform({ k, x: x - step, y });
-  else if (event.key === 'ArrowUp') applyTransform({ k, x, y: y + step });
-  else if (event.key === 'ArrowDown') applyTransform({ k, x, y: y - step });
-  else if (event.key === '+' || event.key === '=') applyTransform({ k: k * 1.25, x, y });
-  else if (event.key === '-') applyTransform({ k: k / 1.25, x, y });
+  const current = rows.value.findIndex((row) => row.id === activeId.value);
+  const row = current >= 0 ? rows.value[current]! : null;
+
+  if (event.key === 'ArrowDown') moveActive(current + 1);
+  else if (event.key === 'ArrowUp') moveActive(current - 1);
+  else if (event.key === 'Home') moveActive(0);
+  else if (event.key === 'End') moveActive(rows.value.length - 1);
+  else if (event.key === 'ArrowRight' && row) {
+    if (row.hasChildren && row.folded) emit('toggle-collapse', row.id);
+    else moveActive(current + 1);
+  } else if (event.key === 'ArrowLeft' && row) {
+    if (row.hasChildren && !row.folded) emit('toggle-collapse', row.id);
+    else if (row.depth > 0) {
+      let parent = current - 1;
+      while (parent > 0 && rows.value[parent]!.depth >= row.depth) parent -= 1;
+      moveActive(parent);
+    }
+  } else if ((event.key === 'Enter' || event.key === ' ') && row) emit('select', row.id);
+  else if (event.key === '+' || event.key === '=') setScale(scale.value * ZOOM_STEP);
+  else if (event.key === '-') setScale(scale.value / ZOOM_STEP);
+  else if (event.key === '0') resetView();
   else return;
   event.preventDefault();
 }
 
-onMounted(() => {
-  const canvas = canvasEl.value;
-  if (!canvas) return;
-  canvas.style.cursor = 'grab';
-  zoomBehavior = zoom<HTMLCanvasElement, unknown>()
-    .scaleExtent([0.01, 8])
-    .on('zoom', (event) => {
-      transform.value = { k: event.transform.k, x: event.transform.x, y: event.transform.y };
-      scheduleDraw();
-    });
-  select(canvas).call(zoomBehavior).on('dblclick.zoom', null);
-  applyTransform(fitTransform());
+/* ── 同步外部状态 ── */
+
+watch(list, (instance) => {
+  scrollEl.value = (instance?.$el as HTMLElement | undefined) ?? null;
+  scrollEl.value?.addEventListener('scroll', hideHover, { passive: true });
+});
+
+watch(
+  () => props.selectedId,
+  (id) => {
+    if (!id) return;
+    const row = rows.value.find((item) => item.id === id);
+    if (!row) return;
+    activeId.value = id;
+    void nextTick(() => scrollRowIntoView(row.index));
+  },
+);
+
+watch(rows, (next) => {
+  if (next.length && !next.some((row) => row.id === activeId.value)) activeId.value = next[0]!.id;
 });
 
 onBeforeUnmount(() => {
-  if (frame) cancelAnimationFrame(frame);
-  select(canvasEl.value).on('.zoom', null);
+  window.clearTimeout(hoverTimer);
+  scrollEl.value?.removeEventListener('scroll', hideHover);
 });
-
-/** 结构或折叠状态变化后重新适配视图。 */
-watch(layout, () => {
-  applyTransform(fitTransform());
-});
-watch([width, height], () => applyTransform(fitTransform()));
-watch(tokens, scheduleDraw);
-watch(
-  () => props.selectedId,
-  () => scheduleDraw(),
-);
 </script>
 
 <template>
   <div class="thread">
-    <div ref="viewport" class="viewport">
-      <canvas
-        ref="canvasEl"
-        class="surface"
-        tabindex="0"
-        role="application"
-        aria-label="评论树：拖拽或滚轮缩放，方向键平移，单击选中评论，双击折叠子树"
-        @pointermove="onPointerMove"
-        @pointerleave="tipPoint = null"
-        @click="tipPoint && emit('select', tipPoint.node.comment.id)"
-        @dblclick="tipPoint && tipPoint.node.children.length && emit('toggle-collapse', tipPoint.node.comment.id)"
-        @keydown="onKeydown"
-      />
-      <div v-if="tipPoint" ref="tipEl" class="tip">
-        <strong>{{ tipPoint.node.comment.author.name }}</strong>
-        <p>
-          {{ tipPoint.node.comment.text.slice(0, 90) }}{{ tipPoint.node.comment.text.length > 90 ? '…' : '' }}
-        </p>
-        <span class="subtle small tnum">深度 {{ tipPoint.depth }} · 子树 {{ tipPoint.node.size }} 条</span>
-      </div>
-      <div class="minimap">
-        <canvas
-          ref="minimapEl"
-          :width="MINIMAP_WIDTH"
-          :height="MINIMAP_HEIGHT"
-          :style="{ width: `${MINIMAP_WIDTH}px`, height: `${MINIMAP_HEIGHT}px` }"
-          @click="onMinimapClick"
-        />
-      </div>
-      <div class="toolbar row">
-        <button type="button" class="btn btn-sm btn-ghost" title="折叠全部子树" @click="emit('collapse-all')">
-          <IconArrowsIn />
+    <div class="bar row between">
+      <span class="hint small subtle">单击选中 · 双击折叠 · 方向键移动 · Ctrl/⌘ + 滚轮缩放</span>
+      <div class="row tools">
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost btn-icon"
+          title="缩小"
+          aria-label="缩小评论树"
+          :disabled="scale <= MIN_SCALE"
+          @click="setScale(scale / ZOOM_STEP)"
+        >
+          <IconMagnifyingGlassMinus />
         </button>
-        <button type="button" class="btn btn-sm btn-ghost" title="展开全部" @click="emit('expand-all')">
-          <IconArrowsOut />
+        <span class="zoom tnum" title="当前缩放">{{ Math.round(scale * 100) }}%</span>
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost btn-icon"
+          title="放大"
+          aria-label="放大评论树"
+          :disabled="scale >= MAX_SCALE"
+          @click="setScale(scale * ZOOM_STEP)"
+        >
+          <IconMagnifyingGlassPlus />
         </button>
-        <button type="button" class="btn btn-sm btn-ghost" title="重置视图" @click="applyTransform(fitTransform())">
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost btn-icon"
+          title="重置视图与缩放"
+          aria-label="重置视图与缩放"
+          @click="resetView"
+        >
           <IconCrosshairSimple />
         </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost btn-icon"
+          title="折叠全部子树"
+          aria-label="折叠全部子树"
+          @click="emit('collapse-all')"
+        >
+          <IconArrowsIn />
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost btn-icon"
+          title="展开全部"
+          aria-label="展开全部"
+          @click="emit('expand-all')"
+        >
+          <IconArrowsOut />
+        </button>
+        <InfoTip
+          text="Ctrl/⌘ + 滚轮缩放，拖拽平移；方向键在节点间移动，Enter 选中，→ 展开、← 折叠；双击节点折叠该子树。"
+          label="评论树操作说明"
+        />
       </div>
     </div>
-    <p class="legend small subtle">单击选中 · 双击折叠 · 滚轮缩放 · 拖拽平移</p>
+
+    <div
+      ref="viewport"
+      class="viewport"
+      :class="{ panning }"
+      :style="viewportStyle"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerUp"
+      @pointerleave="hideHover"
+      @pointerover="onPointerOver"
+      @pointerout="onPointerOut"
+      @wheel="onWheel"
+      @click.capture="onClickCapture"
+    >
+      <div class="tree-host">
+        <VirtualList
+          v-if="threadRoot"
+          ref="list"
+          class="tree"
+          role="tree"
+          tabindex="0"
+          aria-label="评论树：方向键移动，Enter 选中，双击折叠子树"
+          :aria-activedescendant="activeId ? `tree-row-${activeId}` : undefined"
+          :count="rows.length"
+          :item-height="itemHeight"
+          @keydown="onKeydown"
+        >
+          <template #default="{ index }">
+            <div
+              class="thread-row"
+              :class="{ selected: rows[index]!.id === selectedId, active: rows[index]!.id === activeId }"
+              :id="`tree-row-${rows[index]!.id}`"
+              :data-id="rows[index]!.id"
+              role="treeitem"
+              :aria-level="rows[index]!.depth + 1"
+              :aria-selected="rows[index]!.id === selectedId"
+              :aria-expanded="rows[index]!.hasChildren ? !rows[index]!.folded : undefined"
+              @click="onRowClick(rows[index]!)"
+              @dblclick="onRowDoubleClick(rows[index]!)"
+            >
+              <span class="indent" :style="{ width: `${rows[index]!.depth * indentWidth}px` }" aria-hidden="true">
+                <span
+                  v-for="level in rows[index]!.depth"
+                  :key="level"
+                  class="guide"
+                  :class="{ elbow: level === rows[index]!.depth }"
+                  :style="{ left: `${(level - 1) * indentWidth + 8}px` }"
+                />
+              </span>
+
+              <div class="body">
+                <div class="line">
+                  <span class="rail" :class="stanceClass(rows[index]!)" aria-hidden="true" />
+                  <img
+                    v-if="rows[index]!.node.comment.author.avatarUrl && !brokenAvatars.has(rows[index]!.id)"
+                    class="avatar"
+                    :src="rows[index]!.node.comment.author.avatarUrl"
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    @error="brokenAvatars.add(rows[index]!.id)"
+                  />
+                  <span v-else class="avatar fallback" aria-hidden="true">
+                    {{ rows[index]!.node.comment.author.name.slice(0, 1) }}
+                  </span>
+                  <span class="name">{{ rows[index]!.node.comment.author.name }}</span>
+                  <span v-if="rows[index]!.node.comment.author.level !== undefined" class="lv tnum">
+                    Lv{{ rows[index]!.node.comment.author.level }}
+                  </span>
+                  <span v-if="rows[index]!.id === focusId" class="chip chip-accent focus-chip">分析根</span>
+                  <span v-if="turningPoints.has(rows[index]!.id)" class="mark" title="讨论转折点">
+                    <IconFlag />
+                  </span>
+                  <span class="meta tnum">{{ formatRelative(rows[index]!.node.comment.createdAt) }}</span>
+                  <span class="meta tnum">
+                    <IconThumbsUp />
+                    {{ formatCount(rows[index]!.node.comment.likes) }}
+                  </span>
+                </div>
+                <p v-if="!compact" class="preview"><CommentText :text="rows[index]!.preview" :emotes="rows[index]!.node.comment.emotes" /></p>
+              </div>
+
+              <button
+                v-if="rows[index]!.hasChildren"
+                type="button"
+                class="caret"
+                :title="rows[index]!.folded ? '展开该子树' : '折叠该子树'"
+                :aria-label="
+                  rows[index]!.folded
+                    ? `展开 ${rows[index]!.node.children.length} 条回复`
+                    : `折叠 ${rows[index]!.node.children.length} 条回复`
+                "
+                @click.stop="emit('toggle-collapse', rows[index]!.id)"
+              >
+                <IconCaretDown v-if="!rows[index]!.folded" />
+                <IconCaretRight v-else />
+                <span v-if="rows[index]!.hidden" class="tnum">+{{ formatCount(rows[index]!.hidden) }}</span>
+              </button>
+            </div>
+          </template>
+        </VirtualList>
+        <p v-else class="empty">这棵树没有可显示的评论</p>
+      </div>
+
+      <div v-if="hoverRow" ref="tipEl" class="hover">
+        <div class="who">
+          <span class="who-name">{{ hoverRow.node.comment.author.name }}</span>
+          <span v-if="hoverRow.node.comment.author.level !== undefined" class="who-lv tnum">
+            Lv{{ hoverRow.node.comment.author.level }}
+          </span>
+        </div>
+        <div v-if="hoverParentName" class="hover-rel">
+          <IconArrowBendDownRight />
+          <span>回复 {{ hoverParentName }}</span>
+        </div>
+        <div class="hover-meta tnum">
+          {{ formatDateTime(hoverRow.node.comment.createdAt) }} · 深度 {{ hoverRow.depth }} ·
+          {{ formatCount(hoverRow.node.comment.likes) }} 赞
+          <template v-if="hoverRow.node.children.length">
+            · 直接回复 {{ formatCount(hoverRow.node.children.length) }}
+          </template>
+          <template v-if="hoverRow.hidden"> · 已折叠 {{ formatCount(hoverRow.hidden) }}</template>
+          <template v-if="hoverRow.node.comment.location"> · {{ hoverRow.node.comment.location }}</template>
+        </div>
+        <p class="hover-text"><CommentText :text="hoverText" :emotes="hoverRow.node.comment.emotes" /></p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -414,72 +506,330 @@ watch(
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  gap: var(--sp-2);
 }
 
-/* 画布视口：尺寸完全由 CSS（flex 分配 / min-height）决定，与位图无关，
-   从而切断 canvas.width/height 属性 → 布局高度 → 测量的自增长反馈。 */
+.bar {
+  flex: none;
+  gap: var(--sp-2);
+}
+
+.hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools {
+  flex: none;
+  gap: 2px;
+  align-items: center;
+}
+
+/* 缩放读数是状态而不是控件：高频操作一律 icon-only，读数保持纯文本。 */
+.zoom {
+  min-width: 44px;
+  padding: 0 var(--sp-1);
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--fg-subtle);
+}
+
+/* 视口：高度由 CSS（卡片高度 / flex）决定；内容层绝对定位 + 定高窗口化列表，
+   任何内容尺寸都不可能反过来撑高布局。 */
 .viewport {
   position: relative;
   flex: 1;
-  min-height: 260px;
-}
-
-/* 绝对定位 + 100% 尺寸：位图大小不可能影响父级几何。 */
-.surface {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   border-radius: var(--r-sm);
   background: var(--surface);
-  touch-action: none;
+  cursor: grab;
+  touch-action: pan-y;
 }
 
-.tip {
+.viewport.panning {
+  cursor: grabbing;
+}
+
+.tree-host {
+  position: absolute;
+  inset: 0;
+}
+
+.tree {
+  user-select: none;
+}
+
+.thread-row {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  height: 100%;
+  padding: calc(6px * var(--s)) calc(8px * var(--s));
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.thread-row:hover {
+  background: var(--surface-2);
+}
+
+.thread-row.selected {
+  background: var(--accent-bg);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.tree:focus-visible .thread-row.active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 缩进线：整行高度（含行间距）贯通，末级带一个指向节点的肘形接头。 */
+.indent {
+  position: relative;
+  flex: none;
+  align-self: stretch;
+}
+
+.guide {
+  position: absolute;
+  top: 0;
+  bottom: calc(-8px);
+  width: 1px;
+  background: var(--border);
+}
+
+.guide.elbow::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc(12px * var(--s));
+  width: calc(8px * var(--s));
+  height: 1px;
+  background: var(--border);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--s));
+  height: calc(24px * var(--s));
+  min-width: 0;
+}
+
+.rail {
+  flex: none;
+  width: 3px;
+  height: calc(14px * var(--s));
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+
+.rail.root {
+  background: var(--accent);
+}
+
+.rail.s1 {
+  background: var(--c1);
+}
+
+.rail.s2 {
+  background: var(--c2);
+}
+
+.rail.s3 {
+  background: var(--c3);
+}
+
+.rail.s4 {
+  background: var(--c4);
+}
+
+.rail.s5 {
+  background: var(--c5);
+}
+
+.rail.s6 {
+  background: var(--c6);
+}
+
+.avatar {
+  flex: none;
+  width: calc(18px * var(--s));
+  height: calc(18px * var(--s));
+  border-radius: var(--r-pill);
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.avatar.fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--fs-xs) * var(--s));
+  color: var(--fg-muted);
+}
+
+.name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: calc(var(--fs-sm) * var(--s));
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lv,
+.meta {
+  flex: none;
+  font-size: calc(var(--fs-xs) * var(--s));
+  color: var(--fg-subtle);
+}
+
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.meta svg {
+  width: calc(11px * var(--s));
+  height: calc(11px * var(--s));
+}
+
+.focus-chip {
+  flex: none;
+  font-size: calc(var(--fs-xs) * var(--s));
+}
+
+.mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--warning);
+}
+
+.mark svg {
+  width: calc(12px * var(--s));
+  height: calc(12px * var(--s));
+}
+
+.preview {
+  margin: 0;
+  height: calc(36px * var(--s));
+  font-size: calc(var(--fs-sm) * var(--s));
+  line-height: calc(18px * var(--s));
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.caret {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  height: calc(24px * var(--s));
+  padding: 0 calc(4px * var(--s));
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+.caret:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.caret svg {
+  width: calc(14px * var(--s));
+  height: calc(14px * var(--s));
+}
+
+.caret span {
+  font-size: calc(var(--fs-xs) * var(--s));
+}
+
+/* 悬浮详情：作者名在前，其次回复关系与元信息，最后是完整正文（超长在框内滚动）。 */
+.hover {
   position: absolute;
   top: 0;
   left: 0;
-  max-width: 230px;
-  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 380px;
+  max-height: 76%;
+  overflow: hidden;
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
   background: var(--surface);
   box-shadow: var(--shadow-3);
-  pointer-events: none;
-  font-size: var(--fs-sm);
+  pointer-events: auto;
   will-change: transform;
 }
 
-.tip p {
-  margin: 2px 0;
-  color: var(--fg-muted);
+.who {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+
+.who-name {
+  font-weight: 600;
+}
+
+.who-lv {
   font-size: var(--fs-xs);
-  line-height: 1.4;
+  color: var(--fg-subtle);
 }
 
-.minimap {
-  position: absolute;
-  top: var(--sp-2);
-  right: var(--sp-2);
-  border-radius: var(--r-xs);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: var(--shadow-1);
-  overflow: hidden;
-  cursor: crosshair;
-}
-
-.toolbar {
-  position: absolute;
-  top: var(--sp-2);
-  left: var(--sp-2);
+.hover-rel {
+  display: flex;
+  align-items: center;
   gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: var(--shadow-1);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
 }
 
-.legend {
-  flex: none;
-  margin: var(--sp-1) 0 0;
+.hover-rel svg {
+  width: 12px;
+  height: 12px;
+  color: var(--fg-subtle);
+}
+
+.hover-meta {
+  font-size: var(--fs-xs);
+  color: var(--fg-subtle);
+}
+
+.hover-text {
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 719px) {
+  .hint {
+    display: none;
+  }
 }
 </style>

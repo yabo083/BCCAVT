@@ -4,7 +4,7 @@ import type { Cache, Freshness, LoadOptions } from './cache/types';
 import { subjectKey } from './model';
 import type { Comment, Cursor, Page, Session, Subject, SubjectRef, ThreadPage } from './model';
 import type { FetchContext, HttpClient, PlatformAdapter, Politeness } from './platform';
-import type { CrawlOptions, CrawlPhase, CrawlProgress, FetchStats, Snapshot } from './report';
+import type { CrawlOptions, CrawlPhase, CrawlProgress, FetchStats, RootsPage, Snapshot } from './report';
 
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
 
@@ -427,6 +427,101 @@ export async function crawlSubject(
   }
 
   return { subject, comments: keptComments, roots, declared, truncated: reasons.length > 0, reasons };
+}
+
+/**
+ * 只取一页顶层评论（含该页根评论的楼中楼预览）。
+ *
+ * 与 crawlSubject 共用同一套机制：同一套页缓存键（含账号隔离）、同一份 freshness、同一个 CrawlRunner
+ * （礼貌队列 / 重试 / 进度）。区别只有一个——它走一页游标就返回，不做「从起点到第 N 页」的整链重跑：
+ * 于是 cache-first 下翻回已读过的页不会重打平台，调用方也能把结果追加进视图而不是整体替换。
+ * 楼中楼的抓取判据与首屏完全一致：平台声明的回复数多于已知回复数、且未达单树上限的根评论才去抓评论树。
+ */
+export async function crawlRootsPage(
+  runner: CrawlRunner,
+  ref: SubjectRef,
+  session: Session,
+  cursor: Cursor | null,
+  options: CrawlOptions,
+): Promise<RootsPage> {
+  const adapter = runner.adapter;
+  runner.setPhase('subject');
+  const subject = await runner.load(cacheKey('meta', subjectKey(ref)), 'meta', (ctx) => adapter.getSubject(ref, ctx), {
+    force: options.refresh === 'full',
+  });
+
+  // 页面缓存必须按账号隔离：不同身份可见的评论集合不同，混用会把匿名截断结果喂给已登录用户。
+  const account = session.loggedIn ? `u:${session.user?.id ?? 'unknown'}` : 'anon';
+  const usePageCache = options.refresh === 'cache-first';
+  const page = await runner.load<Page<Comment>>(
+    cacheKey('page', subjectKey(ref), account, 'roots', cursor ?? 'start'),
+    'page',
+    (ctx) => adapter.listRoots(subject, cursor, ctx),
+    { force: !usePageCache },
+  );
+
+  const roots: Comment[] = [];
+  const previews: Comment[] = [];
+  const seen = new Set<string>();
+  for (const item of page.items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    if (item.rootId === null) roots.push(item);
+    else previews.push(item);
+  }
+  runner.setPhase('roots', { fetched: roots.length, declared: subject.declaredCommentCount });
+
+  // 顶层分页自带的楼中楼预览先收下；真实回复抓回来后再覆盖它们。
+  const comments = new Map<string, Comment>();
+  for (const root of roots) comments.set(root.id, root);
+  for (const preview of previews) comments.set(preview.id, preview);
+
+  const knownByRoot = new Map<string, number>();
+  for (const preview of previews) {
+    const rootId = preview.rootId;
+    if (rootId === null) continue;
+    knownByRoot.set(rootId, (knownByRoot.get(rootId) ?? 0) + 1);
+  }
+  const pending = roots.filter((root) => {
+    const known = knownByRoot.get(root.id) ?? 0;
+    return root.replyCount > known && (options.maxRepliesPerThread <= 0 || known < options.maxRepliesPerThread);
+  });
+
+  runner.setPhase('threads', {
+    fetched: comments.size,
+    declared: subject.declaredCommentCount,
+    threadsDone: 0,
+    threadsTotal: pending.length,
+  });
+  const concurrency = Math.max(1, adapter.politeness.concurrency);
+  let threadsDone = 0;
+  for (let i = 0; i < pending.length; i += concurrency) {
+    throwIfAborted(runner.signal);
+    await Promise.all(
+      pending.slice(i, i + concurrency).map(async (root) => {
+        const result = await crawlThreadPages(runner, subject, root.id, options.maxRepliesPerThread, usePageCache, account);
+        for (const comment of result.comments) comments.set(comment.id, comment);
+        threadsDone++;
+        runner.setPhase('threads', {
+          fetched: comments.size,
+          declared: subject.declaredCommentCount,
+          threadsDone,
+          threadsTotal: pending.length,
+        });
+      }),
+    );
+  }
+
+  return {
+    subject,
+    comments: [...comments.values()],
+    roots,
+    next: page.next,
+    declared: subject.declaredCommentCount,
+    // 身份限制随页带回：未登录时平台会把顶层评论截断成几条并直接说「到底」，
+    // 调用方（阅读器）只有拿到这句话，才能把「不完整 4 / 1330」解释成「为什么只有 4 条」。
+    limitations: [...session.limitations],
+  };
 }
 
 export interface ThreadCrawl {

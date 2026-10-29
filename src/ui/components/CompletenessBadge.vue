@@ -7,7 +7,7 @@ import InfoTip from './InfoTip.vue';
 import { formatCount } from '../format';
 import type { Completeness } from '@/core/report';
 
-const props = defineProps<{ completeness: Completeness }>();
+const props = withDefaults(defineProps<{ completeness: Completeness; compact?: boolean }>(), { compact: false });
 
 const detail = computed(() => {
   const { declared, fetched, reasons } = props.completeness;
@@ -24,7 +24,7 @@ const detail = computed(() => {
       <IconCheckCircle v-else />
       {{ completeness.truncated ? '不完整' : '完整' }}
     </span>
-    <span class="tnum subtle">
+    <span v-if="!props.compact" class="tnum subtle">
       {{ formatCount(completeness.fetched) }}<template v-if="completeness.declared !== undefined"> / {{ formatCount(completeness.declared) }}</template>
     </span>
     <InfoTip :text="detail" :label="'完整度：' + detail" />

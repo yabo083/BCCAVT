@@ -179,22 +179,31 @@ function chipLabels(id: string): string | undefined {
 }
 
 const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
+
+/** 折叠摘要：一眼看清「模型 / 开关 / 有没有填密钥」，点开才是完整表单。
+ *  窄栏里宽度很紧（~110px），所以停用时就只写「未启用」——完整型号在 `title` 里。 */
+const settingsSummary = computed(() => {
+  if (!settings.value.baseUrl || !settings.value.model) return '未配置';
+  return settings.value.enabled ? settings.value.model : '未启用';
+});
 </script>
 
 <template>
   <div class="stack view">
-    <div class="columns">
-      <section class="card stack">
-        <div class="card-head">
-          <h2 class="card-title"><IconSparkle /> AI 设置</h2>
-          <span v-if="permission !== null" class="chip" :class="permission ? 'chip-success' : 'chip-warning'">
-            {{ permission ? '已授权' : '未授权' }}
-          </span>
-        </div>
+    <details class="ai-settings">
+      <summary class="disclosure-head row">
+        <IconSparkle class="disclosure-icon" />
+        <span class="disclosure-title">AI 设置</span>
+        <span v-if="permission !== null" class="chip" :class="permission ? 'chip-success' : 'chip-warning'">
+          {{ permission ? '已授权' : '未授权' }}
+        </span>
+        <span class="disclosure-summary tnum" :title="settings.model">{{ settingsSummary }}</span>
+      </summary>
 
-        <label class="checkbox">
-          <input v-model="settings.enabled" type="checkbox" />
-          启用 AI 解读
+      <div class="disclosure-body stack">
+        <label class="switch-row">
+          <span>启用 AI 解读</span>
+          <input v-model="settings.enabled" class="switch" type="checkbox" />
         </label>
 
         <div class="row wrap">
@@ -211,8 +220,14 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
 
         <div class="field">
           <label for="ai-base">接口地址</label>
-          <input id="ai-base" v-model="settings.baseUrl" class="input" type="url" placeholder="https://api.deepseek.com/v1" />
-          <span class="hint">不含 /chat/completions，会自动补上</span>
+          <input
+            id="ai-base"
+            v-model="settings.baseUrl"
+            class="input"
+            type="url"
+            placeholder="https://api.deepseek.com/v1"
+            title="不含 /chat/completions，会自动补上"
+          />
         </div>
 
         <div class="field">
@@ -225,6 +240,7 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
               :type="revealKey ? 'text' : 'password'"
               autocomplete="off"
               :placeholder="settings.apiKey ? '已保存（留空则不修改）' : 'sk-…'"
+              title="密钥只写入 chrome.storage.local，不进缓存、不进日志"
               @input="apiKeyDirty = true"
             />
             <button
@@ -237,7 +253,6 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
               <IconEye v-else />
             </button>
           </div>
-          <span class="hint">密钥只写入 chrome.storage.local，不进缓存、不进日志</span>
         </div>
 
         <div class="row">
@@ -246,7 +261,7 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
             <input id="ai-model" v-model="settings.model" class="input" type="text" />
           </div>
           <div class="field grow">
-            <label for="ai-max">输入字符上限</label>
+            <label for="ai-max" title="每次发给模型的正文上限，超出部分会被截断">字符上限</label>
             <input id="ai-max" v-model.number="settings.maxInputChars" class="input tnum" type="number" min="500" step="500" />
           </div>
         </div>
@@ -256,7 +271,7 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
             额外请求体
             <InfoTip text="合并进 /chat/completions 请求体的 JSON 对象。例如 DeepSeek 关闭思考：{&quot;thinking&quot;:{&quot;type&quot;:&quot;disabled&quot;}}" />
           </label>
-          <textarea id="ai-extra" v-model="extraBodyText" class="textarea" spellcheck="false" @input="onExtraBodyInput" />
+          <textarea id="ai-extra" v-model="extraBodyText" class="textarea" rows="3" spellcheck="false" @input="onExtraBodyInput" />
           <span v-if="extraBodyError" class="hint error-text">{{ extraBodyError }}</span>
         </div>
 
@@ -275,14 +290,14 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
         <p v-if="checkResult" class="small" :class="checkResult.ok ? 'ok-text' : 'error-text'">
           {{ checkResult.ok ? `连接正常 · ${checkResult.latencyMs} 毫秒` : `连接失败：${checkResult.error ?? '未知原因'}` }}
         </p>
-      </section>
+      </div>
+    </details>
 
-      <div class="stack column">
-        <section class="card stack">
-          <div class="card-head">
-            <h2 class="card-title"><IconChatCircleText /> 评论区解读</h2>
-            <span v-if="state.insight?.cached" class="chip chip-info">缓存命中</span>
-          </div>
+    <section class="stack">
+      <header class="section-head row">
+        <h2 class="section-title"><IconChatCircleText /> 评论区解读</h2>
+        <span v-if="state.insight?.cached" class="chip chip-info">缓存命中</span>
+      </header>
           <p v-if="!state.subject" class="empty">先分析一个视频的评论区，再回来生成解读。</p>
           <template v-else>
             <div class="row wrap">
@@ -304,13 +319,13 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
             />
             <p v-else class="empty">解读会以流式 Markdown 出现；其中的评论引用可以直接点击跳转。</p>
           </template>
-        </section>
+    </section>
 
-        <section class="card stack">
-          <div class="card-head">
-            <h2 class="card-title"><IconBrain /> 评论树诊断</h2>
-            <span v-if="state.diagnosis?.cached" class="chip chip-info">缓存命中</span>
-          </div>
+    <section class="stack">
+      <header class="section-head row">
+        <h2 class="section-title"><IconBrain /> 评论树诊断</h2>
+        <span v-if="state.diagnosis?.cached" class="chip chip-info">缓存命中</span>
+      </header>
           <p v-if="!state.thread" class="empty">先分析一条评论的评论树，再回来诊断讨论走向。</p>
           <template v-else>
             <div class="row wrap">
@@ -354,28 +369,114 @@ const fallacyNotes = computed(() => state.diagnosis?.fallacies ?? []);
             </template>
             <p v-else class="empty">诊断会给出立场分组（同时给评论树着色）、谬误标注与讨论转折点。</p>
           </template>
-        </section>
-      </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .view {
   gap: var(--sp-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+/* 面板是窄栏：三块内容（设置 / 解读 / 诊断）直接叠在 .view 上，不做「卡片套卡片」。
+   设置是低频块，默认收成一行摘要（与「输入」tab 的抓取选项同一套 disclosure 语言）。 */
+.ai-settings {
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.disclosure-head {
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosure-head::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure-head:hover {
+  color: var(--fg);
+}
+
+.disclosure-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.disclosure-title {
+  flex: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.disclosure-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  color: var(--fg-subtle);
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.disclosure-body {
   gap: var(--sp-3);
-  align-items: start;
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
 }
 
-@media (min-width: 720px) {
-  .columns {
-    grid-template-columns: minmax(280px, 1fr) minmax(0, 1.2fr);
-  }
+.ai-settings[open] .disclosure-head {
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+.ai-settings[open] .disclosure-icon {
+  color: var(--accent);
+}
+
+/* 布尔行：左名右开关，整行可点（与设置弹窗的 config-row 同一口径）。 */
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 28px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+/* 分区标题：比面板标题（.dock-title，13px）再轻一档，只留一条细线分节。 */
+.section-head {
+  justify-content: space-between;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 空状态：一行左对齐的说明，不做居中大段（窄栏里居中会读成一团）。 */
+.view .empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg-subtle);
+  text-align: left;
 }
 
 .summary {

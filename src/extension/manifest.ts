@@ -23,13 +23,18 @@ export function createManifest(version: string): chrome.runtime.ManifestV3 {
     action: {
       default_title: 'Loupe · 评鉴',
       default_icon: { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png' },
+      // 左键单击工具栏图标打开紧凑设置面板；不再有侧栏，也没有 default_popup 之外的入口。
+      default_popup: 'src/ui/config.html',
     },
-    side_panel: { default_path: 'src/ui/app.html' },
     background: { service_worker: 'background.js', type: 'module' },
-    permissions: ['sidePanel', 'storage', 'contextMenus', 'declarativeNetRequest'],
+    permissions: ['storage', 'contextMenus', 'declarativeNetRequest'],
     host_permissions: [...new Set(adapters.flatMap((adapter) => adapter.hostPermissions))],
     // AI 接口地址由用户自行填写，首次使用某个来源时申请权限
     optional_host_permissions: ['https://*/*', 'http://*/*'],
+    web_accessible_resources: [{
+      resources: ['src/ui/embedded.html', 'assets/*'],
+      matches: ['https://www.bilibili.com/*'],
+    }],
     content_scripts: [
       { matches: CONTENT_SCRIPT_MATCHES, js: ['content/main.js'], world: 'MAIN', run_at: 'document_idle' },
       { matches: CONTENT_SCRIPT_MATCHES, js: ['content/isolated.js'], run_at: 'document_idle' },

@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCache } from '@/core/cache/index';
+import { createMemoryCache } from '@/core/cache/memory';
 import { CACHE_SCHEMA, FRESHNESS_TTL_MS, cacheKey } from '@/core/cache/types';
 import { uniqueDbName } from './fakes';
 
@@ -215,5 +216,92 @@ describe('降级与键空间', () => {
     const stale = `v${CACHE_SCHEMA - 1}|meta|old`;
     await cache.set(stale, 'old', 'meta');
     expect(await cache.get(stale)).toBeUndefined();
+  });
+});
+
+describe('纯内存缓存（页面上下文）', () => {
+  it('不碰 IndexedDB：TTL 无抖动、到期即过期', async () => {
+    vi.stubGlobal('indexedDB', {
+      open() {
+        throw new Error('indexedDB 不可用');
+      },
+    });
+    let clock = 1_000;
+    const cache = createMemoryCache({ now: () => clock });
+    const key = cacheKey('meta', 'video');
+    await cache.set(key, { title: 'x' }, 'meta');
+
+    const entry = await cache.get<{ title: string }>(key);
+    expect(entry?.value).toEqual({ title: 'x' });
+    expect(entry!.expiresAt! - entry!.storedAt).toBe(FRESHNESS_TTL_MS.meta!);
+    expect(cache.stats().memory.hits).toBe(1);
+
+    clock += FRESHNESS_TTL_MS.meta!;
+    expect(await cache.get(key)).toBeUndefined();
+    expect(cache.stats().disk.hits).toBe(0);
+    expect(cache.stats().degraded).toBe(0);
+  });
+
+  it('immutable / pointer 不过期', async () => {
+    let clock = 5_000;
+    const cache = createMemoryCache({ now: () => clock });
+    await cache.set(cacheKey('snapshot', 'a@1'), 1, 'immutable');
+    await cache.set(cacheKey('pointer', 'latest'), 'a@1', 'pointer');
+    clock += 400 * 24 * 3_600_000;
+    expect((await cache.get<number>(cacheKey('snapshot', 'a@1')))?.value).toBe(1);
+    expect((await cache.get<string>(cacheKey('pointer', 'latest')))?.value).toBe('a@1');
+  });
+
+  it('getOrLoad 单飞，命中时 source 为 memory', async () => {
+    const cache = createMemoryCache();
+    const key = cacheKey('meta', 'single');
+    let release!: (value: number) => void;
+    let loads = 0;
+    const loader = (): Promise<number> => {
+      loads++;
+      return new Promise<number>((resolve) => {
+        release = resolve;
+      });
+    };
+
+    const pending = Promise.all([1, 2, 3].map(() => cache.getOrLoad(key, 'meta', loader)));
+    for (let i = 0; i < 50 && cache.stats().coalesced < 2; i++) await Promise.resolve();
+    expect(cache.stats().coalesced).toBe(2);
+    release(7);
+    const results = await pending;
+
+    expect(loads).toBe(1);
+    expect(results.map((result) => result.value)).toEqual([7, 7, 7]);
+    expect(results.every((result) => result.source === 'network')).toBe(true);
+    expect((await cache.getOrLoad(key, 'meta', loader)).source).toBe('memory');
+  });
+
+  it('loader 抛错透传且不写缓存', async () => {
+    const cache = createMemoryCache();
+    const key = cacheKey('meta', 'boom');
+    const boom = new Error('boom');
+    let calls = 0;
+    const failing = async (): Promise<number> => {
+      calls++;
+      throw boom;
+    };
+    await expect(cache.getOrLoad(key, 'meta', failing)).rejects.toBe(boom);
+    await expect(cache.getOrLoad(key, 'meta', failing)).rejects.toBe(boom);
+    expect(calls).toBe(2);
+    expect(await cache.get(key)).toBeUndefined();
+  });
+
+  it('keys / deletePrefix / usage 按契约工作，容量上限淘汰最旧', async () => {
+    const cache = createMemoryCache({ capacity: 2 });
+    await cache.set(cacheKey('a', '1'), 1, 'meta');
+    await cache.set(cacheKey('a', '2'), 2, 'meta');
+    await cache.set(cacheKey('a', '3'), 3, 'meta');
+
+    expect(await cache.keys(cacheKey('a'))).toEqual([cacheKey('a', '2'), cacheKey('a', '3')]);
+    expect(await cache.get(cacheKey('a', '1'))).toBeUndefined();
+    expect(await cache.usage()).toEqual({ entries: 2, bytes: 0 });
+
+    await cache.deletePrefix(cacheKey('a'));
+    expect(await cache.keys(cacheKey('a'))).toEqual([]);
   });
 });

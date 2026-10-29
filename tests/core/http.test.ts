@@ -101,3 +101,69 @@ describe('createHttpClient', () => {
     expect(error.kind).toBe('aborted');
   });
 });
+
+describe('createHttpClient.postForm', () => {
+  it('表单编码、带 Cookie、不带 cache/signal', async () => {
+    const { fetch, calls } = fakeFetch(async () => jsonResponse('{"code":0,"message":"0"}'));
+    const data = await createHttpClient({ fetch }).postForm('https://api.example.com/x/v2/reply/add', {
+      oid: '243322853',
+      type: '1',
+      message: '测试 test&x=A+B',
+      csrf: 'token',
+    });
+
+    expect(data).toEqual({ code: 0, message: '0' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://api.example.com/x/v2/reply/add');
+    const init = calls[0]!.init;
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('include');
+    expect(init.headers).toEqual({ 'content-type': 'application/x-www-form-urlencoded' });
+    expect(init.signal).toBeUndefined();
+    expect(init.body).toBe('oid=243322853&type=1&message=%E6%B5%8B%E8%AF%95+test%26x%3DA%2BB&csrf=token');
+  });
+
+  it('空参数集发出空请求体', async () => {
+    const { fetch, calls } = fakeFetch(async () => jsonResponse('{"code":0}'));
+    await createHttpClient({ fetch }).postForm('https://api.example.com/x', {});
+    expect(calls[0]!.init.body).toBe('');
+  });
+
+  it('412 映射为 rate-limited，并解析 Retry-After', async () => {
+    const { fetch } = fakeFetch(async () => jsonResponse('<html>风控</html>', 412, { 'retry-after': '3' }));
+    const error = await capture(createHttpClient({ fetch }).postForm('https://api.example.com/x', { csrf: 't' }));
+    expect(error.kind).toBe('rate-limited');
+    expect(error.code).toBe(412);
+    expect(error.retryAfterMs).toBe(3000);
+  });
+
+  it('其他非 2xx 映射为 protocol', async () => {
+    const { fetch } = fakeFetch(async () => jsonResponse('nope', 502));
+    const error = await capture(createHttpClient({ fetch }).postForm('https://api.example.com/x', {}));
+    expect(error.kind).toBe('protocol');
+    expect(error.code).toBe(502);
+  });
+
+  it('非 JSON 响应体映射为 protocol', async () => {
+    const { fetch } = fakeFetch(async () => jsonResponse('<html>慢一点</html>', 200));
+    const error = await capture(createHttpClient({ fetch }).postForm('https://api.example.com/x', {}));
+    expect(error.kind).toBe('protocol');
+    expect(error.message).toContain('JSON');
+  });
+
+  it('网络异常映射为 network', async () => {
+    const { fetch } = fakeFetch(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const error = await capture(createHttpClient({ fetch }).postForm('https://api.example.com/x', {}));
+    expect(error.kind).toBe('network');
+  });
+
+  it('错误文本不带请求体（csrf 不外泄）', async () => {
+    const csrf = 's3cr3t-csrf-token';
+    const { fetch } = fakeFetch(async () => jsonResponse('<html>风控</html>', 412));
+    const error = await capture(createHttpClient({ fetch }).postForm('https://api.example.com/x', { csrf }));
+    expect(error.message).not.toContain(csrf);
+    expect(error.stack ?? '').not.toContain(csrf);
+  });
+});

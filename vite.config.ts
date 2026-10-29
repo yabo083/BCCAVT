@@ -1,6 +1,7 @@
 /**
  * 构建配置。`npm run build` 实际调用 scripts/build.mjs，它按顺序跑四趟 Vite 构建：
- *   app            页面（src/ui/app.html，同时作为侧边栏与整页）+ 后台 Service Worker（ESM）
+ *   app            页面（src/ui/app.html，整页工作台）、工具栏设置弹窗（src/ui/config.html）
+ *                  与后台 Service Worker（ESM）
  *   content:main   内容脚本主世界（自包含 IIFE）
  *   content:isolated 内容脚本隔离世界（自包含 IIFE）
  *   manifest       只打包求值（write: false），导出 createManifest(version)，由 build.mjs 写出 dist/manifest.json
@@ -65,6 +66,8 @@ function appConfig(outDir: string, appHtml: string): UserConfig {
       rollupOptions: {
         input: {
           app: fromProjectRoot(appHtml),
+          config: fromProjectRoot('src/ui/config.html'),
+          embedded: fromProjectRoot('src/ui/embedded.html'),
           background: fromProjectRoot('src/extension/background.ts'),
         },
         output: {

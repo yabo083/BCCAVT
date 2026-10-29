@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PlatformError } from '@/core/errors';
 import { normalizeReply, rawRootId } from '@/platforms/bilibili/normalize';
+import type { Comment, Emote } from '@/core/model';
 import { fixture, type RawJson } from './fakes';
 
 const UPPER_MID = '486906719';
@@ -56,6 +57,8 @@ describe('normalizeReply：真实 fixture', () => {
       name: '老咸鱼A',
       avatarUrl: 'https://i1.hdslb.com/bfs/face/10fbeb658285067378c049b290988ab49c32aee5.jpg',
       level: 6,
+      // 主页地址由适配器归一化给出：UI 只负责渲染成链接（点击开主页 / 悬停出卡片）
+      profileUrl: 'https://space.bilibili.com/320773657',
     });
   });
 
@@ -114,6 +117,17 @@ describe('normalizeReply：字段规整', () => {
     expect(numericEdges.rootId).toBeNull();
   });
 
+  it('头像 URL 一律升到 https：平台默认头像与协议相对地址都不放过', () => {
+    const withAvatar = (avatar: string) => normalizeReply(rawReply({ member: { mid: '9', uname: 'u', avatar } })).author.avatarUrl;
+    // 实机出现过的兜底头像就是 http
+    expect(withAvatar('http://i0.hdslb.com/bfs/face/member/noface.jpg')).toBe(
+      'https://i0.hdslb.com/bfs/face/member/noface.jpg',
+    );
+    expect(withAvatar('//i1.hdslb.com/bfs/face/x.jpg')).toBe('https://i1.hdslb.com/bfs/face/x.jpg');
+    expect(withAvatar('https://i2.hdslb.com/bfs/face/y.jpg')).toBe('https://i2.hdslb.com/bfs/face/y.jpg');
+    expect(withAvatar('')).toBeUndefined();
+  });
+
   it('楼中楼不带回复总数，likes 缺失按 0', () => {
     const reply = normalizeReply(rawReply({ root_str: '100', parent_str: '200', rcount: 5, like: undefined }));
     expect(reply.replyCount).toBe(0);
@@ -148,5 +162,99 @@ describe('rawRootId', () => {
   it('顶层评论返回自身 id，楼中楼返回所属根 id', () => {
     expect(rawRootId(rawReply(), 'root')).toBe('100');
     expect(rawRootId(rawReply({ root_str: '55' }), 'root')).toBe('55');
+  });
+});
+
+describe('normalizeReply：表情（content.emote）', () => {
+  const detail = fixture<RawJson>('detail-p1.json');
+  const replies = detail.data.root.replies as RawJson[];
+
+  /** 构造一条只带给定 emote 字典的评论。 */
+  const withEmote = (emote: unknown, message = '正文'): Comment =>
+    normalizeReply(rawReply({ content: { message, emote } }));
+
+  it('真实 fixture：token → https CDN 图片，平台没给宽高就不填', () => {
+    const comment = normalizeReply(replies[0], { path: 'replies[0]' });
+    expect(comment.text).toBe('[支持]');
+    expect(comment.emotes).toEqual({
+      '[支持]': { url: 'https://i0.hdslb.com/bfs/emote/3c210366a5585706c09d4c686a9d942b39feeb50.png' },
+    });
+  });
+
+  it('一条评论可带多个表情，字典键就是正文里的 token', () => {
+    const p2 = fixture<RawJson>('detail-p2.json');
+    const comment = normalizeReply((p2.data.root.replies as RawJson[])[2], { path: 'r' });
+    expect(Object.keys(comment.emotes!)).toEqual(['[再见]', '[思考]']);
+    expect(comment.text).toBe('回复 @一名路过且帅气的网友 :你这个评论区的回复还带蓝字展开就离谱啊[思考][再见]');
+    expect(comment.emotes!['[思考]']!.url).toContain('https://i0.hdslb.com/bfs/emote/');
+  });
+
+  it('http 与协议相对的 CDN 地址都规范化成 https', () => {
+    // detail-p1 的 [初音未来_委屈] 在真实响应里就是 http，必须升到 https。
+    const comment = normalizeReply(replies[13], { path: 'r' });
+    expect(comment.emotes!['[初音未来_委屈]']!.url).toBe(
+      'https://i0.hdslb.com/bfs/emote/55023c31259200e5c821cac526b36e527f455d43.png',
+    );
+    expect(withEmote({ '[a]': { url: '//i0.hdslb.com/a.png' } }).emotes!['[a]']!.url).toBe(
+      'https://i0.hdslb.com/a.png',
+    );
+    expect(withEmote({ '[b]': { url: 'https://www.bilibili.com/b.png' } }).emotes!['[b]']!.url).toBe(
+      'https://www.bilibili.com/b.png',
+    );
+  });
+
+  it('非 https / 非 CDN / 带凭据的地址整条丢弃，评论本身照常归一化', () => {
+    const bad = [
+      'data:image/png;base64,AAAA',
+      'javascript:alert(1)',
+      'http://evil.com/x.png',
+      'https://hdslb.com.evil.com/x.png',
+      'https://xhdslb.com/x.png',
+      'ftp://i0.hdslb.com/x.png',
+      'https://user:pass@i0.hdslb.com/x.png',
+    ];
+    for (const url of bad) {
+      const comment = withEmote({ '[x]': { url } }, '看[x]');
+      expect(comment.emotes).toBeUndefined();
+      expect(comment.text).toBe('看[x]');
+      expect(comment.id).toBe('100');
+    }
+  });
+
+  it('同一条里坏表情只丢自己，好的保留', () => {
+    const comment = withEmote(
+      {
+        '[good]': { url: 'https://i0.hdslb.com/g.png' },
+        '[bad]': { url: 'javascript:alert(1)' },
+        '[nonobject]': 'nope',
+        '[nourl]': { text: '[nourl]' },
+      },
+      '[good][bad][nonobject][nourl]',
+    );
+    expect(Object.keys(comment.emotes!)).toEqual(['[good]']);
+  });
+
+  it('可选宽高在合理区间内保留，越界或非整数按未提供处理', () => {
+    const emoteOf = (width: unknown, height: unknown): Emote =>
+      withEmote({ '[a]': { url: 'https://i0.hdslb.com/a.png', width, height } }).emotes!['[a]']!;
+    expect(emoteOf(20, 20)).toEqual({ url: 'https://i0.hdslb.com/a.png', width: 20, height: 20 });
+    expect(emoteOf(1, 512)).toEqual({ url: 'https://i0.hdslb.com/a.png', width: 1, height: 512 });
+    expect(emoteOf(0, 99999)).toEqual({ url: 'https://i0.hdslb.com/a.png' });
+    expect(emoteOf(1.5, '20')).toEqual({ url: 'https://i0.hdslb.com/a.png' });
+  });
+
+  it('content.emote 缺失或非对象时不产生 emotes，也不报协议错误', () => {
+    expect(normalizeReply(rawReply()).emotes).toBeUndefined();
+    expect(withEmote('nope').emotes).toBeUndefined();
+    expect(withEmote({}).emotes).toBeUndefined();
+    expect(withEmote(null).emotes).toBeUndefined();
+    expect(withEmote({ '': { url: 'https://i0.hdslb.com/a.png' } }).emotes).toBeUndefined();
+  });
+
+  it('token 恰为 __proto__ 时只作普通键，不污染原型', () => {
+    const comment = withEmote(JSON.parse('{"__proto__":{"url":"https://i0.hdslb.com/p.png"}}'), '__proto__');
+    expect(Object.getPrototypeOf(comment.emotes)).toBe(Object.prototype);
+    expect(Object.keys(comment.emotes!)).toEqual(['__proto__']);
+    expect(comment.emotes!['__proto__']!.url).toBe('https://i0.hdslb.com/p.png');
   });
 });

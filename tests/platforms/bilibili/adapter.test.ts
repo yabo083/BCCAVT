@@ -101,7 +101,8 @@ describe('getSession', () => {
         isLogin: true,
         mid: 12345,
         uname: '登录用户',
-        face: 'https://i0.hdslb.com/bfs/face/x.jpg',
+        // 平台实测会给 http 头像（未设置头像时是 http 的 noface 兜底图）：边界必须升到 https
+        face: 'http://i0.hdslb.com/bfs/face/x.jpg',
         level_info: { current_level: 5 },
         wbi_img: {
           img_url: `https://i0.hdslb.com/bfs/wbi/${IMG_KEY}.png`,
@@ -127,7 +128,8 @@ describe('getSubject', () => {
       aid: OID,
       bvid: 'BV1GJ411x7h7',
       title: '【测试】稿件',
-      pic: 'https://i0.hdslb.com/bfs/archive/x.jpg',
+      // 封面同样是平台原样给的 http：边界升 https，别把 Mixed Content 带进扩展页面
+      pic: 'http://i0.hdslb.com/bfs/archive/x.jpg',
       pubdate: 1606652805,
       stat: { reply: 236961 },
       owner: { mid: 486906719, name: 'UP 主', face: 'https://i0.hdslb.com/bfs/face/up.jpg' },

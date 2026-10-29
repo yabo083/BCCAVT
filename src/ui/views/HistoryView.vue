@@ -53,14 +53,14 @@ onMounted(async () => {
 
 <template>
   <div class="stack view">
-    <section class="card stack">
-      <div class="card-head">
-        <h2 class="card-title"><IconClockCounterClockwise /> 历史快照</h2>
+    <section class="stack">
+      <header class="section-head row">
+        <h2 class="section-title"><IconClockCounterClockwise /> 历史快照</h2>
         <button type="button" class="btn btn-sm btn-ghost" @click="refreshHistory">
           <IconArrowClockwise />
           刷新
         </button>
-      </div>
+      </header>
 
       <ul v-if="state.history.length" class="list">
         <li v-for="item in state.history" :key="item.id" class="row wrap entry">
@@ -83,13 +83,13 @@ onMounted(async () => {
       <p v-else class="empty">还没有快照。每次抓取完成都会在这里留下一条不可变记录。</p>
     </section>
 
-    <section class="card stack">
-      <div class="card-head">
-        <h2 class="card-title"><IconDatabase /> 缓存</h2>
+    <section class="stack">
+      <header class="section-head row">
+        <h2 class="section-title"><IconDatabase /> 缓存</h2>
         <span class="small subtle tnum">
           {{ usage ? `${formatCount(usage.entries)} 条 · ${formatBytes(usage.bytes)}` : '读取中' }}
         </span>
-      </div>
+      </header>
 
       <dl v-if="cacheRows.length" class="stats">
         <template v-for="row in cacheRows" :key="row.label">
@@ -119,6 +119,9 @@ onMounted(async () => {
 <style scoped>
 .view {
   gap: var(--sp-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .list {
@@ -131,9 +134,41 @@ onMounted(async () => {
 }
 
 .entry {
-  padding: var(--sp-2);
-  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 快照行是列表行（细分隔线 + hover 提亮），不再一行一个盒子：面板是窄栏，盒子套盒子只会显得挤。 */
+.entry:hover {
   background: var(--surface-2);
+}
+
+.list > .entry:last-child {
+  border-bottom: 0;
+}
+
+/* 分区标题：比面板标题再轻一档，只留一条细线分节（与 AI 面板、输入面板同一套）。 */
+.section-head {
+  justify-content: space-between;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 空状态：一行左对齐的说明，不用居中大段。 */
+.view .empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg-subtle);
+  text-align: left;
 }
 
 .title {

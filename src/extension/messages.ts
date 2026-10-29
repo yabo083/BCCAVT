@@ -84,3 +84,37 @@ export const ENSURE_HEADER_RULES = 'loupe:ensure-header-rules';
 export interface EnsureHeaderRulesMessage {
   type: typeof ENSURE_HEADER_RULES;
 }
+
+/**
+ * 工作台 / 图谱窗口 → 后台：把某条评论定位到它所在视频的评论区。
+ *
+ * 后台按 input 的视频身份找已打开的 B 站视频标签页（激活并转发给它的内容脚本），找不到就记下待办
+ * （见 page-comments.ts 的 LOCATE_PENDING_KEY）再新开一个标签页。定位是尽力而为的跳转：
+ * 响应只有成功或一句给人看的失败原因，失败不影响工作台里已有的分析。
+ */
+export const LOCATE_COMMENT = 'loupe:locate-comment';
+
+export interface LocateCommentRequest {
+  type: typeof LOCATE_COMMENT;
+  /** 规范视频地址（`https://www.bilibili.com/video/<BV>/…`）。 */
+  input: string;
+  /** 要定位到的评论 id（纯数字）。 */
+  commentId: string;
+}
+
+export type LocateCommentResponse = { ok: true } | { ok: false; error: string };
+
+/** 定位请求的边界校验：非空地址 + 纯数字评论 id。后台解析视频身份时还会再验一次地址。 */
+export function isLocateCommentRequest(value: unknown): value is LocateCommentRequest {
+  if (typeof value !== 'object' || value === null) return false;
+  const { type, input, commentId } = value as Record<string, unknown>;
+  return type === LOCATE_COMMENT && typeof input === 'string' && input !== '' && isCommentId(commentId);
+}
+
+/** 定位响应守卫：成功不带载荷，失败必须带一句可展示的原因。 */
+export function isLocateCommentResponse(value: unknown): value is LocateCommentResponse {
+  if (typeof value !== 'object' || value === null) return false;
+  const { ok, error } = value as Record<string, unknown>;
+  if (ok === true) return error === undefined;
+  return ok === false && typeof error === 'string' && error !== '';
+}

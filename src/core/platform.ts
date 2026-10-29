@@ -22,6 +22,11 @@ export interface HttpRequest {
  */
 export interface HttpClient {
   getJson<T = unknown>(request: HttpRequest, signal: AbortSignal): Promise<T>;
+  /**
+   * 表单 POST（application/x-www-form-urlencoded），带 Cookie。错误映射与 getJson 完全一致。
+   * 参数里可能带写操作的凭据（csrf），实现方绝不能把参数写进日志、错误文本或缓存键。
+   */
+  postForm(url: string, params: Record<string, string>): Promise<unknown>;
 }
 
 export interface FetchContext {
@@ -43,6 +48,41 @@ export interface Politeness {
   concurrency: number;
   /** 相邻两次请求开始的最小间隔。 */
   minIntervalMs: number;
+}
+
+/**
+ * 写操作的鉴权参数。csrf（bilibili 的 bili_jct）由调用方在写执行时从 document.cookie 现读，
+ * 只在本层拼进请求体即时使用：绝不跨桥、绝不进日志 / 快照 / 缓存键 / storage / 错误文本。
+ */
+export interface WriteAuth {
+  csrf: string;
+}
+
+export interface LikeCommentInput {
+  /** 目标主体：适配器从 subject.locator 取 oid/type（与 listRoots 用的是同一个 Subject）。 */
+  subject: Subject;
+  /** 目标评论 id，顶层评论与楼中楼都接受。 */
+  commentId: string;
+  action: 'like' | 'unlike';
+}
+
+export interface ReplyCommentInput {
+  /** 目标主体：同上。 */
+  subject: Subject;
+  /** 被回复的评论 id；省略 / null = 发表新的顶层评论。 */
+  commentId?: string | null;
+  /** 评论树真实根 id：回复楼中楼时给出；省略时以 commentId 自身为根（即直接回复一条根评论）。 */
+  rootId?: string | null;
+  /** 正文；平台上限由适配器校验。 */
+  text: string;
+}
+
+/** 平台的写能力。凭据只经 auth 参数进入，适配器自身绝不读 cookie。 */
+export interface PlatformWrites {
+  /** 点赞 / 取消点赞。平台返回 code 0 即 resolve。 */
+  likeComment(input: LikeCommentInput, auth: WriteAuth): Promise<void>;
+  /** 发表评论 / 回复，成功后返回归一化的新评论。 */
+  replyComment(input: ReplyCommentInput, auth: WriteAuth): Promise<Comment>;
 }
 
 export interface PlatformAdapter {
@@ -69,4 +109,7 @@ export interface PlatformAdapter {
 
   /** 一棵评论树的回复分页。commentId 可为楼中楼，适配器负责定位真实根；首页必须带 root。 */
   listThread(subject: Subject, commentId: string, cursor: Cursor | null, ctx: FetchContext): Promise<ThreadPage>;
+
+  /** 可选写能力（点赞 / 回复）；缺省表示该平台只读。 */
+  readonly writes?: PlatformWrites;
 }
