@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
  * 顶部浮动总览，分两级：
- *   第一级「是什么」——品牌、当前画布数据源的主体标题、右侧动作（刷新 / 主题配色 / 明暗主题）；
- *   第二级「多少、什么状态」——评论/参与者/完整度/登录态/抓取于/来自快照，
- *   同一排接上画布的图数据源、节点·边计数与仿真状态（这三项原来压在底部工具条左端，
- *   工具条只该放工具，参数归顶栏）。
+ *   第一级「是什么」——品牌、当前画布数据源的主体标题、右侧动作（刷新 / 明暗主题）；
+ *      主题配色只在设置弹窗里改（顶栏不再放色点），改完两边的文档通过存储事件各自跟随。
+ *   第二级「多少、什么状态」——顺序固定为**数据源 → 主体数字 → 图的规模（小一号衬影文字）→
+ *      完整度 → 抓取时间 → 状态 chip**：先说是哪份数据，再给量级，最后给状态。
+ *      登录态那一段文字已删——`SessionChip` 已经把身份摆在同一排，再写一句「登录态/匿名」是重复。
  * 输入与抓取选项在左侧「输入」面板里（TargetView），这里只读不写。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -16,7 +17,6 @@ import IconWarningCircle from '~icons/ph/warning-circle';
 import IconSun from '~icons/ph/sun';
 import IconMoon from '~icons/ph/moon-stars';
 import CompletenessBadge from './CompletenessBadge.vue';
-import PalettePicker from './PalettePicker.vue';
 import SessionChip from './SessionChip.vue';
 import { refreshSubject, startThread, state } from '../store';
 import { formatCount, formatRelative } from '../format';
@@ -126,7 +126,6 @@ function refresh(): void {
         >
           <IconArrowClockwise />
         </button>
-        <PalettePicker />
         <button
           type="button"
           class="btn btn-sm btn-icon"
@@ -141,30 +140,33 @@ function refresh(): void {
     </div>
 
     <p class="row wrap params tnum">
-      <template v-if="report && snapshot">
-        <span>{{ formatCount(report.overview.total) }} 条评论</span>
-        <span class="sep" aria-hidden="true">·</span>
-        <span>{{ formatCount(report.overview.authors) }} 位参与者</span>
-        <span class="sep" aria-hidden="true">·</span>
-        <CompletenessBadge :completeness="snapshot.completeness" compact />
-        <span class="sep" aria-hidden="true">·</span>
-        <span>{{ snapshot.auth === 'user' ? '登录态' : '匿名' }}</span>
-        <span class="sep minor" aria-hidden="true">·</span>
-        <span class="minor">抓取于 {{ formatRelative(snapshot.fetchedAt) }}</span>
-        <template v-if="result?.fromSnapshot">
-          <span class="sep minor" aria-hidden="true">·</span>
-          <span class="chip chip-info minor">来自快照</span>
-        </template>
-      </template>
-
-      <span class="sep" aria-hidden="true">·</span>
+      <!-- ① 数据源：这一排所有数字都属于它，所以它排在最前（连同图标）。 -->
       <IconTreeStructure v-if="props.kind === 'thread'" class="scope-icon" />
       <IconGraph v-else class="scope-icon" />
       <span class="scope-label">{{ props.scopeLabel }}</span>
-      <template v-if="props.nodes !== null">
-        <span class="minor">{{ formatCount(props.nodes) }} 节点 · {{ formatCount(props.links ?? 0) }} 边</span>
-        <span v-if="physicsLabel" class="chip">{{ physicsLabel }}</span>
+
+      <!-- ② 主文字：评论数与参与者数。 -->
+      <template v-if="report && snapshot">
+        <span class="sep" aria-hidden="true">·</span>
+        <span>{{ formatCount(report.overview.total) }} 条评论</span>
+        <span class="sep" aria-hidden="true">·</span>
+        <span>{{ formatCount(report.overview.authors) }} 位参与者</span>
       </template>
+
+      <!-- ③ 衬影文字：图的规模紧跟在主文字后面，小一号、弱一档，读作同一句的补充。 -->
+      <template v-if="props.nodes !== null">
+        <span class="sep minor" aria-hidden="true">·</span>
+        <span class="minor">{{ formatCount(props.nodes) }} 节点 · {{ formatCount(props.links ?? 0) }} 边</span>
+      </template>
+
+      <!-- ④ 完整度与抓取时间，⑤ 状态 chip 收尾。 -->
+      <template v-if="report && snapshot">
+        <span class="sep" aria-hidden="true">·</span>
+        <CompletenessBadge :completeness="snapshot.completeness" compact />
+        <span class="minor">抓取于 {{ formatRelative(snapshot.fetchedAt) }}</span>
+      </template>
+      <span v-if="result?.fromSnapshot" class="chip chip-info minor">来自快照</span>
+      <span v-if="physicsLabel" class="chip">{{ physicsLabel }}</span>
     </p>
   </header>
 </template>

@@ -944,11 +944,14 @@ function openInputPanel(): void {
 }
 
 /* 收起态：面板本体（.panel 的玻璃底 / 边框 / 投影）全部让给把手，避免「方板 + 内层把手」叠成两层壳。
-   **顶边与展开态对齐（align-self: start）**：展开/收起切换时这一侧的上边缘与右边缘都不动，
-   只换形态（竖把手 ↔ 面板），不然整块会从屏幕中间跳回顶部。 */
+   **顶边与展开态对齐（align-self: start）**：展开/收起切换时这一侧的上边缘不动，
+   只换形态（竖把手 ↔ 面板），不然整块会从屏幕中间跳回顶部。
+   **右边贴壁**：`.overlay` 有 12px 内边距，收起时用等量负外边距把把手顶到视口右缘——
+   把手本来就是「贴壁的书签」（右角方、右边无描边），留一条缝就变成浮在中间的小方块。 */
 .detail-panel.collapsed {
   width: auto;
   padding: 0;
+  margin-right: calc(var(--sp-3) * -1);
   align-self: start;
   border: 0;
   border-radius: 0;

@@ -83,7 +83,7 @@
 
 | ID | 场景 | 前置条件 | 操作步骤 | 预期结果 | 判据 |
 |---|---|---|---|---|---|
-| THEME-01 | 配色跨文档即时生效 | 已装扩展、开着替换评论区；工作台（或 `app.html`）已打开 | 在工作台顶栏点另一个色点 / 改取色器 | 工作台与**已打开的** B 站页阅读器同时换色（两个文档的 `html[data-palette]` 与 `getComputedStyle(html).getPropertyValue('--accent')` 一致），**无需刷新**；重开页面仍是该配色 | [ADR-0007](../docs/adr/0007-theme-palette-tokens.md)、`theme.ts#watchPalette`、`tokens.css` 的 `data-palette` 段 |
+| THEME-01 | 配色跨文档即时生效 | 已装扩展、开着替换评论区；工作台（或 `app.html`）已打开 | 在**设置弹窗**里换一个配色（顶栏已无色点）/ 改取色器 | 工作台与**已打开的** B 站页阅读器同时换色（两个文档的 `html[data-palette]` 与 `getComputedStyle(html).getPropertyValue('--accent')` 一致），**无需刷新**；重开页面仍是该配色 | [ADR-0007](../docs/adr/0007-theme-palette-tokens.md)、`theme.ts#watchPalette`、`tokens.css` 的 `data-palette` 段 |
 | THEME-02 | 明暗与配色正交 | 同上 | 先选一套配色，再切明暗；或先切明暗再选配色 | 两种顺序结果相同（`data-theme` 与 `data-palette` 互不覆盖）；中性色阶只随明暗变，accent 系只随配色变 | [ADR-0007](../docs/adr/0007-theme-palette-tokens.md)、`tokens.css` |
 
 ## 7. 图谱窗口（GRAPH）
