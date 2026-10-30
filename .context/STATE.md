@@ -1,6 +1,33 @@
 # 当前状态（L1）
 
-> 更新时间：2026-10-30。2.4.0 第一刀已于 2026-10-29 提交（`9e17598`…`6f81918`…`d0362ed`）；2026-10-30 的新改动是**热度序成链缓存 + 阅读器完整度口径 + 412 冷却可视化/自动重试 + 交互请求纳入令牌桶**（见下节）。
+> 更新时间：2026-10-30（**存档；明天 2026-10-31 从下面第一节继续**）。
+> 2.4.0 已发版：版本 `2.3.0 → 2.4.0`、`release/loupe-2.4.0.zip` 已上传商店并提交审核（`uploadState=SUCCESS`、`publish status=["OK"]`），线上待审核通过后生效；代码与文档均已推到 `origin/main`。
+
+## ⏭ 明天从这里继续（2026-10-31）
+
+**唯一未收尾的事：OAuth 品牌没有通过验证（`您的品牌未向用户显示`）。** 与扩展功能、发版、refresh token 都无关——发布脚本已实测可用，2.4.0 也已提交审核。
+
+### 现状（今天收工时的准确状态）
+
+- Google Auth Platform：发布状态 **正式版**；`Data access` = 未请求敏感范围，**无需验证**；只有 `Branding` 卡住。
+- 品牌字段：应用名称 `Loupe`、支持邮箱 `sz7372797@gmail.com`、首页 `https://loupe.miyakko.de/`、隐私政策 `…/privacy.html`、条款 `…/terms.html`、已授权网域 `miyakko.de`（保存无报错）。
+- 站点：GitHub Pages（仓库 `yabo083/yabo083.github.io`）+ 自定义域名 `loupe.miyakko.de`（Cloudflare CNAME，DNS only），三个页面均 200；今天已按 5 条驳回意见重写过（单一名称、明示无需登录、用途、不生成图像、隐私政策表格化）。
+- Search Console 两个资源已验证：`https://loupe.miyakko.de/`（URL 前缀）与 `miyakko.de`（网域，DNS TXT `google-site-verification=Qg0JFUFPmyX2c-JTIX3SwRj0Ix9NXnlYAtMKZqT-Gl8`）。
+- 两次提交被驳回：第一次 6 条（含「首页域名不归你」），第二次 5 条（归属那条消失，剩内容判定）。**第二次距归属验证只过了 3 分钟，属于抢跑**——Google 明确要求等 24 小时。
+
+### 明天两条路，先试 A（更快、自用足够）
+
+**A. 绕开验证：移除应用徽标。** GCP 的规则写在弹窗里：「应用配置包含 10 个以上网域、**1 个徽标**、或敏感/受限范围时，才需要提交验证」。现在品牌页挂着徽标，于是被迫走验证；移除后（`品牌 → 应用徽标 → 移除 → 保存`）按该规则就不再强制验证，品牌应当直接向用户显示。代价是 consent 页面没有图标，自用无感。做完后到 `目标对象` 确认发布状态仍是正式版、并刷新 `品牌` 看验证状态是否变成「已验证/无需验证」。
+
+**B. 真过验证：** 2026-10-31 15:30 之后（归属验证满 24h）点 `品牌 → 查看问题 → 我已解决相关问题 → 继续`。若仍驳回，按每条意见核对 `https://loupe.miyakko.de/` 的实际内容（Googlebot UA 已实测 200）。
+
+### 明天的工具就绪状态
+
+- **浏览器接管**：`omp browser-relay` 服务已跑过、扩展已装（`chrome://extensions` 里 OMP Browser Relay 开着），`browser.open()` 可直接驱动你的 Chrome；标签 `gcp-branding`、`gsc` 若已冻结，重新 `browser.open({name, url})` 即可。
+- **Cloudflare**：官方 CLI `cf` 已认证（`cf auth whoami` → authenticated/tokenValid），改 DNS 一条命令：`cf dns records create -z miyakko.de --body '{"type":"CNAME","name":"…","content":"…","ttl": 1,"proxied":false}'`。
+- **别删**：Pages 仓库里的 `CNAME`、`google89d8cf978a002c5c.html`（Search Console URL 前缀验证文件）、apex 的 TXT 记录——删了会掉验证。
+- **不要再把站点放服务器**：用户明确要求「用 GitHub 免费资源 + 自有域名覆盖、不暴露端点」，`bren9np` 上的 `loupe-site.service` / `/opt/loupe-site` / 隧道 ingress 已全部撤掉。
+
 
 ## 热度序成链缓存 · 完整度 · 412（2026-10-30 落地，未发版）
 
@@ -66,7 +93,6 @@
 - **第二次驳回（2026-10-30 15:15 提交，15:20 出结果）**：域名归属那条**消失了**（`miyakko.de` 已被 Google 认作你的），剩 5 条全是内容判定话术：隐私政策内容不足 / 首页在登录页之后 / 首页未说明用途 / 名称不一致 / Google APIs ToS(AI NCII)。URL 已是 `loupe.miyakko.de`，说明它确实抓了新站——但提交时距归属验证只过了 3 分钟，按 Google 自己的说明这是抢跑（要等 24h 让抓取更新）。
 - **页面已按这 5 条重写**（2026-10-30，仓库 `yabo083/yabo083.github.io`）：首页标题与 H1 统一为 `Loupe`、开篇一个框明写「无需登录即可阅读」、单独一段讲用途、新增「What Loupe does not do」（不收集数据 / 不用 Google API 取用户数据 / 不生成任何图像，对应 AI NCII 那条）；隐私政策改成开头一张「收集？后端？出售？Cookie？什么会离开浏览器？」的表格 + 分节展开 + OAuth client 章节。Googlebot UA 实测 200、标题正确、无 robots.txt。
 - **待办（明天）**：2026-10-31 15:30 之后再点「品牌 → 查看问题 → 我已解决相关问题 → 继续」；今天的两次提交都在归属验证后几分钟内，拿到的仍是旧抓取。
-- **品牌页改挂 GitHub Pages（2026-10-30，已被上一条取代）**：新建用户站仓库 `yabo083/yabo083.github.io`（落地页写明 Loupe 是什么、无需登录、OAuth client 只用于上传扩展；+ `privacy.html` / `terms.html`），Pages 源 `main:/`，地址 <https://yabo083.github.io/>；Search Console 用 URL 前缀资源 + HTML 文件（`google89d8cf978a002c5c.html`）验证通过。品牌页三项链接与已授权网域全部改指 `yabo083.github.io` 并保存。
 - **验证被驳回两次，第二次是因为抢跑**：第一次用 `github.com/yabo083/BCCAVT`（域名不归你）+ gist 隐私政策，6 条问题全是「域名不可验证」连带出来的通用话术。换 Pages 后立刻重提，仍被驳回，且第 1 条明确写着「verify ownership … **then wait 24 hours**」——Search Console 的归属信号还没传给品牌审核系统。**下一步：等 24 小时后再点「我已解决相关问题 → 继续」**（其余 5 条预计随之消失；站点内容已满足：无登录、写明用途、名称 `Loupe` 与权限页一致）。
 - **OAuth 应用已转正式版（2026-10-30，浏览器接管完成）**：`Google Auth Platform → 品牌` 填好并保存——应用名称 `Loupe`、用户支持邮箱 `sz7372797@gmail.com`、应用首页 `https://github.com/yabo083/BCCAVT`、隐私权政策 / 服务条款指向公开 gist（`gist.github.com/yabo083/f64000377a494ba17e30e13f718a92a1` 的 `#file-privacy-md` / `#file-terms-md`）、已获授权的网域只加 `github.com`（`chromewebstore.google.com` 会要求授权 `google.com`，不可行）。`目标对象 → 发布应用 → 确认` 后发布状态 **测试 → 正式版**；页面提示「需要验证」——只影响他人授权（会看到未验证提示、上限 100 用户），自己用这个 client 不受影响，暂不提交验证。
 - 真机复核：发布后 `refresh_token` 换 `access_token` 仍成功（`expires_in=3599`、scope 正确）⇒ refresh token 7 天失效的问题已解除。
