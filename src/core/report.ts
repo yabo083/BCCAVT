@@ -200,6 +200,12 @@ export interface CrawlOptions {
   maxRepliesPerThread: number;
   /** 顶层评论的排序维度；缺省 'time'（保证可遍历完整）。 */
   order?: RootOrder;
+  /**
+   * 是否在取顶层分页时**顺带**抓每棵评论树的回复（分析/快照需要成品数据集，缺省 true）。
+   * 逐页预览的阅读器必须传 false：它只靠分页自带的楼中楼预览先出首屏，展开某一条时再按需抓
+   * ——否则一页 20 条根评论里带回复的那些各发一次 `detail`，以 1 rps 排队等于首屏白等 6–20 秒。
+   */
+  includeThreads?: boolean;
 }
 
 /** 抓取选项里的顶层排序：缺省 'time'。页缓存键也按它隔离（两种序各自成链）。 */

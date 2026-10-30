@@ -96,11 +96,6 @@ import type {
   RefreshMode,
 } from '@/core/report';
 
-/**
- * 每页根评论的楼中楼抓取上限：与平台顶层分页自带的预览数齐平（B 站一页 20 条，每条带 3 条预览），
- * 于是取一页顶层评论不会连带发评论树请求——想看更多回复请展开那一条。
- */
-const PAGE_REPLIES = 3;
 /** 展开一条评论时最多取这么多回复；再多请用放大镜在独立窗口里看完整树。 */
 const EXPANDED_REPLIES = 200;
 /**
@@ -623,7 +618,9 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
         })
         .catch(() => {});
     }
-    const options: CrawlOptions = { refresh, maxRoots: 0, maxRepliesPerThread: PAGE_REPLIES, order: order.value };
+    // includeThreads=false：首屏只取顶层那一页（分页自带楼中楼预览），回复展开时按需抓。
+    // 少了这一步，一页里带回复的根评论会各发一次 detail（1 rps 排队），首屏白等好几秒。
+    const options: CrawlOptions = { refresh, maxRoots: 0, maxRepliesPerThread: 0, order: order.value, includeThreads: false };
     const page = await readerWorkbench.previewRootsPage(
       resolved.target.subject,
       cursor,

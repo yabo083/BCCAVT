@@ -754,7 +754,9 @@ export async function crawlRootsPage(
     if (rootId === null) continue;
     knownByRoot.set(rootId, (knownByRoot.get(rootId) ?? 0) + 1);
   }
-  const pending = roots.filter((root) => {
+  // 阅读器（includeThreads=false）只靠分页自带的楼中楼预览出首屏：一页 20 条根评论里带回复的那些
+  // 各发一次 detail 会让首屏多等 6–20 秒，而那些回复展开时才需要。
+  const pending = options.includeThreads === false ? [] : roots.filter((root) => {
     const known = knownByRoot.get(root.id) ?? 0;
     return root.replyCount > known && (options.maxRepliesPerThread <= 0 || known < options.maxRepliesPerThread);
   });

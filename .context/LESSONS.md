@@ -174,6 +174,7 @@
 - **判据**：`entries` 里首屏键约 30 分钟、深页键约 12 小时；跨 45 分钟后回看首屏回源、深页仍命中（单测 `roots-page.test.ts` 用可控时钟覆盖）。
 - **顺带的两个正确性补丁**：① 会话重置守卫从「整页都等于首块」放宽到「**任一 id 已在链里**」——中间块的重置同样会让旧块冒充第 N 块、静默吞掉一段；② 两个标签页同看一个视频时，热度序整段取数放进 `loupe-hot|<subject>|<account>` 的 Web Lock，否则两边「读链记录 → 回源 → 写记录」互相覆盖指针。
 - **诚实优先**：整条快照回放超过 5 分钟就在完整度气泡里写明「这是 N 分钟前读取的快照」，实时页不标——缓存不能假装自己是实时的。
+- **首屏别为「以后会看到的」付钱**：阅读器逐页取数原本会给每条「声明回复数 > 内联预览数」的根评论各发一次 `detail`——一页 20 条里 13 条带回复，1 rps 排队让首行白等 6 秒（冷缓存实测 8.9 s）。分页自带的楼中楼预览已经够铺首屏，展开某条时才需要完整树 ⇒ `includeThreads: false` 后首行 2.6 s、`detail` 0。判据不是「少发了请求」，而是**首行出现时间**；同一份数据在分析路径仍要补齐（成品数据集与逐页预览是两种消费方式）。
 - **预取只动触发位置**：宿主把 `viewportHeight` 一起送进 `READER_VIEWPORT`，阅读器用「距底一屏」做阈值（`prefetchMargin = max(480, viewportHeight)`）。边沿触发、单飞、每页一次都不变，请求数不变；提前量只买一次 RTT 的观感。**别把提前量继续放大**：那是拿请求换手感，用户往往就在那儿停下。
 
 **相关位置**：`src/core/cache/types.ts#FRESHNESS_TTL_MS`、`src/core/crawl.ts#loadRootsPage` / `#loadHotRootsPage`、`src/ui/EmbeddedComments.vue#prefetchMargin` / `#completeness`、`src/extension/content/page-reader.ts#postViewport`、`tests/core/roots-page.test.ts`、`tests/ui/embedded-comments-reader.test.ts`。

@@ -105,6 +105,8 @@ let ioCallbacks: Array<(entries: Array<{ isIntersecting: boolean }>) => void>;
 let extraHeight: number;
 /** 平台随页带回的「身份限制」（如未登录截断）：按用例设置，默认没有。 */
 let pageLimitations: string[];
+/** 阅读器实际传下去的取数选项（首屏不等评论树就是靠它）。 */
+let lastOptions: { includeThreads?: boolean } | null;
 /** 定位用例观察 `scrollIntoView` 用（happy-dom 不一定实现它，缺就自己装一个）。 */
 let scrollSpy: MockInstance;
 let post: MockInstance;
@@ -219,6 +221,7 @@ beforeEach(() => {
   ioCallbacks = [];
   extraHeight = 1000;
   pageLimitations = [];
+  lastOptions = null;
   mocks.contextUrl = VIDEO_URL;
 
   vi.stubGlobal('chrome', {
@@ -274,11 +277,12 @@ beforeEach(() => {
     async (
       _ref: SubjectRef,
       cursor: string | null,
-      _options: unknown,
+      options: unknown,
       onProgress: (progress: { phase: 'roots'; fetched: number; declared: number }) => void,
       signal: AbortSignal,
     ): Promise<RootsPage> => {
       requests.push(cursor);
+      lastOptions = options as { includeThreads?: boolean };
       if (gateCursor !== undefined && gateCursor === cursor && gatePromise !== null) {
         await gatePromise;
         // 与真实取数一致：中断以异常收场，阅读器据此把它当「取消」而不是失败
@@ -335,6 +339,13 @@ describe('嵌入阅读器的取数触发', () => {
     expect(requests).toEqual([null, 'p1']);
     expect(wrapper.findAll('.comment-row')).toHaveLength(3);
     expect(wrapper.text()).toContain('没有更多评论了');
+  });
+
+  it('首屏不等评论树：逐页取数带 includeThreads=false，回复展开时才抓', async () => {
+    planPages([{ cursor: null, comments: [ROOT, SECOND], next: null }]);
+    await open();
+
+    expect(lastOptions?.includeThreads).toBe(false);
   });
 
   it('距底还有一屏就预取：提前量随宿主视口高度走，仍然每页只取一次', async () => {

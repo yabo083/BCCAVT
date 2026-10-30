@@ -347,6 +347,35 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     ).rejects.toMatchObject({ kind: 'invalid-input' });
   });
 
+  it('includeThreads=false：首屏只取顶层那一页，不为每条根评论预取评论树（分页自带预览照收）', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([
+      [makeComment({ id: 'r1', replyCount: 5 }), makeComment({ id: 'r2', replyCount: 4 })],
+    ]);
+    adapter.threadProvider = (id) => ({
+      items: [makeComment({ id: `${id}-reply`, rootId: id, parentId: id })],
+      next: null,
+    });
+    const workbench = build(adapter);
+
+    const page = await workbench.previewRootsPage(
+      adapter.subject.ref,
+      null,
+      options({ includeThreads: false }),
+      noop,
+      signal(),
+    );
+
+    expect(adapter.calls.roots).toBe(1);
+    expect(adapter.calls.thread).toBe(0);
+    expect(page.roots.map((comment) => comment.id)).toEqual(['r1', 'r2']);
+
+    // 缺省（分析 / 快照）仍会补齐评论树
+    const filled = await workbench.previewRootsPage(adapter.subject.ref, null, options(), noop, signal());
+    expect(adapter.calls.thread).toBeGreaterThan(0);
+    expect(filled.comments.some((comment) => comment.rootId !== null)).toBe(true);
+  });
+
   it('逐页取数不写快照与历史（只算不存）', async () => {
     const adapter = new FakeAdapter();
     adapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })]]);

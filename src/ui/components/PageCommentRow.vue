@@ -29,7 +29,7 @@ import IconMapPin from '~icons/ph/map-pin';
 import IconThumbsUp from '~icons/ph/thumbs-up';
 import IconThumbsDown from '~icons/ph/thumbs-down';
 import IconThumbsDownFill from '~icons/ph/thumbs-down-fill';
-import IconDotsThree from '~icons/ph/dots-three';
+import IconDotsThree from '~icons/ph/dots-three-vertical';
 import CommentComposer from './CommentComposer.vue';
 import CommentText from './CommentText.vue';
 import { splitMention } from '../comment-text';
