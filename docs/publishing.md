@@ -47,6 +47,15 @@ npm run publish        # 补齐后：上传并提交发布
 ## 三、后台仍需人工补齐（API 无法替代，缺则审核打回或卡在草稿）
 
 - **隐私政策 URL**：Loupe 读取评论、按登录态执行点赞/回复、可选把摘录发往用户自配 AI 端点，必须提供。
+  - 站点：**GitHub Pages + 自有域名**——内容在仓库 `yabo083/yabo083.github.io`（`index.html` 落地页 / `privacy.html` / `terms.html` / `CNAME`），Pages 的自定义域名设为 `loupe.miyakko.de`，公网地址 <https://loupe.miyakko.de/>。
+  - DNS：Cloudflare `miyakko.de` 区里 `loupe` → CNAME `yabo083.github.io`（**DNS only**，由 GitHub 自己签发证书）。用 `cf` CLI 管理：`cf dns records create -z miyakko.de --body '{"type":"CNAME","name":"loupe","content":"yabo083.github.io","ttl":1,"proxied":false}'`。
+  - **不要**把站点放到 bren9np：那会暴露服务器入口，且与「用 GitHub 免费资源 + 自有域名覆盖」的口径冲突。
+  - OAuth 品牌页三项指向：首页 `https://loupe.miyakko.de/`、隐私政策 `…/privacy.html`、服务条款 `…/terms.html`；**已获授权的网域填 `miyakko.de`**（Google 按可注册域校验，填 `loupe.miyakko.de` 会报「域名无效：必须为顶级专用域名」）。
+  - 域名归属：Search Console 需要两个资源——`https://loupe.miyakko.de/`（URL 前缀，HTML 文件，自动验证通过）与 **`miyakko.de` 网域资源**（DNS TXT：`google-site-verification=…`，用 `cf dns records create` 写 TXT 到 apex 后点「验证您的所有权」即自动通过）。TXT 与 Pages 的 `google*.html` 都不要删，否则掉验证。
+
+## 三、后台仍需人工补齐（API 无法替代，缺则审核打回或卡在草稿）
+
+- **隐私政策 URL**：Loupe 读取评论、按登录态执行点赞/回复、可选把摘录发往用户自配 AI 端点，必须提供。
   - 现在挂在 **GitHub Pages 用户站**：<https://yabo083.github.io/>（仓库 `yabo083/yabo083.github.io`，`index.html` 落地页 + `privacy.html` + `terms.html` + Search Console 验证文件）。
   - OAuth 品牌页三项都指向这里：首页 `https://yabo083.github.io/`、隐私政策 `…/privacy.html`、服务条款 `…/terms.html`；**已获授权的网域只能填 `yabo083.github.io`**——填 `github.com` 会报「网域未注册到您名下」，填 `chromewebstore.google.com` 会要求授权 `google.com`（不可能）。
   - 域名归属用 **Search Console 的 URL 前缀资源** `https://yabo083.github.io/` + HTML 文件验证（文件已在站点根目录，删了会掉验证）。
