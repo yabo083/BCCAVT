@@ -24,6 +24,7 @@ Chrome Web Store API 需要你用自己的 Google 账号建一套 OAuth 凭据�
    - 响应里的 `refresh_token` 即所需值。
 
 把三个值填进 `.env`（照 `.env.example`）：
+
 ```
 CWS_CLIENT_ID=...
 CWS_CLIENT_SECRET=...
@@ -55,3 +56,10 @@ npm run publish        # 补齐后：上传并提交发布
 - 写操作（点赞/回复/发布）须用户显式点击触发，不自动、不批量，否则可能判为垃圾/操纵。
 - `bili_jct` 仅在写请求体内即时使用，不存储、不外传——描述与隐私政策据实说明。
 - 具体条款以 Chrome Web Store Program Policies 最新版为准。
+
+## 四、常见故障
+
+- **`OAuth 换取 access_token 失败：invalid_grant`**：refresh_token 过期或被撤销（测试态 OAuth 客户端的 refresh_token 7 天不用即失效，改动密码/权限也会作废）。只需重做第一节第 5 步换一个新的 refresh_token 写回 `.env` 的 `CWS_REFRESH_TOKEN`，其余不用动。
+  - 实测（2026-10-30）：桌面应用客户端用 `redirect_uri=urn:ietf:wg:oauth:2.0:oob` 换 code 仍然可用；若 Google 回 `redirect_uri_mismatch`，改用 `http://localhost` 再试（同一 code 在 mismatch 时不会被消耗）。
+  - code 只能用一次且很快过期：拿到就换，别隔一会儿。
+- **`/publish` 回 411**：空 body 的 POST 少了 `Content-Length`（已在脚本里用 `form: ''` 修掉，见 2.2.0 发版记录）。

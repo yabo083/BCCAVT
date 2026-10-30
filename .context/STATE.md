@@ -60,7 +60,7 @@
 
 - 版本 `2.3.0 → 2.4.0`（`package.json` 与 `package-lock.json` 同步）；`npm run package` 产出 `release/loupe-2.4.0.zip`（408,193 字节），`dist/manifest.json` 版本 2.4.0。
 - 代码已推送 `origin/main`（`48b58c5`，仓库 `yabo083/BCCAVT`）。
-- **商店更新没做成**：`npm run publish` 在换 `access_token` 时被 Google 拒（`invalid_grant`）——refresh_token 过期或被撤销（测试态 OAuth 客户端的 refresh_token 7 天不用会过期）。两条路：① 按 `docs/publishing.md` 第一节重做一次授权换新 refresh_token 填回 `.env`，再 `npm run publish`；② 直接在商店后台手动上传 `release/loupe-2.4.0.zip`（item `afhenfapijikioaiopcjfagabbhphkpj`，线上仍是 2.3.0）。
+- **商店已更新**：首跑 `npm run publish` 撞 `invalid_grant`（refresh_token 过期——测试态 OAuth 客户端 7 天不用即失效）；用一次性授权 `code` 换到新 refresh_token（`redirect_uri=urn:ietf:wg:oauth:2.0:oob` 仍被接受）写回 `.env` 后重跑：`uploadState=SUCCESS`、`publish status=["OK"]`、`statusDetail=["OK."]`、`target=default`，item 仍是 `afhenfapijikioaiopcjfagabbhphkpj`。线上 2.3.0 → 2.4.0 待审核通过。
 - 本版内容 = 下面三刀 + 三处 UI 调整（顶栏参数行重排/色点移除、完整度徽标自带气泡、收起详情回到浮岛规格）。
 
 ## 第三刀：楼中楼自动补全 + 按页取（2026-10-30）
