@@ -1,6 +1,6 @@
 {
   "name": "loupe",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "description": "评论区解析浏览器扩展：鉴权、抓取、分析、可视化、AI 解读一体化（当前平台：Bilibili）",
   "type": "module",
