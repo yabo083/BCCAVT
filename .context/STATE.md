@@ -56,7 +56,14 @@
 - **两个标签页同看一个视频**（清缓存后重跑）：两边都到 64 根 / 徽章完整，全程 `wbi/main` 共 **6 次**，IndexedDB 里只有 **一条**链记录（块 0–5）⇒ 一把链锁 + 块缓存确实让两个阅读器共用一次抓取，没有重复请求、没有跳块。
 - 预取只有单测覆盖（真机上无法稳定观测「触发时滚动位置」），不做真机结论。
 
-## 第三刀：楼中楼自动补全 + 按页取（2026-10-30，未发版）
+## 2.4.0 发版（2026-10-30）
+
+- 版本 `2.3.0 → 2.4.0`（`package.json` 与 `package-lock.json` 同步）；`npm run package` 产出 `release/loupe-2.4.0.zip`（408,193 字节），`dist/manifest.json` 版本 2.4.0。
+- 代码已推送 `origin/main`（`48b58c5`，仓库 `yabo083/BCCAVT`）。
+- **商店更新没做成**：`npm run publish` 在换 `access_token` 时被 Google 拒（`invalid_grant`）——refresh_token 过期或被撤销（测试态 OAuth 客户端的 refresh_token 7 天不用会过期）。两条路：① 按 `docs/publishing.md` 第一节重做一次授权换新 refresh_token 填回 `.env`，再 `npm run publish`；② 直接在商店后台手动上传 `release/loupe-2.4.0.zip`（item `afhenfapijikioaiopcjfagabbhphkpj`，线上仍是 2.3.0）。
+- 本版内容 = 下面三刀 + 三处 UI 调整（顶栏参数行重排/色点移除、完整度徽标自带气泡、收起详情回到浮岛规格）。
+
+## 第三刀：楼中楼自动补全 + 按页取（2026-10-30）
 
 用户两条反馈：① 楼中楼要「二次点击 fold-act」才完整加载（第一次点只是折叠，第二次才回源）；② 但也不能一次全抓——原生楼中楼分页是有道理的。
 
