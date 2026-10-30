@@ -29,7 +29,9 @@
 | RDR-07 | 图谱/工作台 → 评论区定位（跨三个上下文） | 已装扩展、开着替换评论区、工作台里已有该视频的结果并选中一条评论 | 点详情卡「在评论区定位」 | ① 宿主页面滚到该行（`scrollY` 改变，行居中）；② 目标行出现 `selected` 与 `flash-highlight`；③ 目标被祖先折叠时先展开、落在渲染上限之外时先抬上限；④ 目标不在已读范围内时经 `seek_rpid` 取回它的根评论块钉在流上方（定位块：目标行 `selected` + `flash-highlight`，流序不动；评论已删除时给「不存在或已被删除」提示） | [ADR-0008](../docs/adr/0008-locate-in-reader.md)、[ADR-0009](../docs/adr/0009-located-comment-pinned-block.md)、`EmbeddedComments.vue#locateComment`、`page-reader.ts#flushLocate` |
 | RDR-10 | 行内操作：点踩 / ⋯ 菜单 / 正文链接 | 已登录、阅读器已出若干行 | ① 点踩 → 按钮实心、赞过的评论赞态被撤（计数回落），失败回滚+notice；② ⋯ → 「复制评论链接」写剪贴板 `${url}#reply<id>`，「加入黑名单」两段确认（不透明菜单面），「举报」开对话框选理由（其他须填备注，不提交则不发请求），「删除」只对自己的评论出现且需二次确认、成功后该行连同子树消失；③ 正文 @提及 / jump 关键词 / 裸 http(s) URL 渲染为可点链接（新标签打开） | `EmbeddedComments.vue#toggleDislike/#deleteComment/#copyCommentLink/#blockUser/#reportComment`、`PageCommentRow.vue`、`reader-comments.ts#blockIntent/#reportIntent`、`page-comments.ts#isReaderWriteRequest`、`src/platforms/bilibili/api.ts#blockUser/#reportComment`、`comment-text.ts#tokenizeComment` |
 | RDR-11 | 评论区默认排序设置 | 弹窗可见 | 弹窗「评论区排序」分段控件（最热|最新）写 `loupe.reader.defaultOrder`；默认开（hot）；只对下一次打开的阅读器生效 | `ConfigPopup.vue`、`page-comments.ts#READER_DEFAULT_ORDER_KEY` |
-| RDR-09 | 排序切换「最热 \| 最新」换数据集 | 阅读器已加载 ≥2 页 | ① 点「最新」→ 1 次 `mode=2` 请求，行整批替换、第一行是最新评论；② 点回「最热」→ **0** 新请求（order 页键命中缓存）；③ 再点「最新」→ 0 请求；④ 在「最新」滚 2 页 → 只有 `mode=2` 请求且行只追加 | [ADR-0004](../docs/adr/0004-reader-row-order-append-only.md) 补充、`EmbeddedComments.vue#switchOrder` |
+| RDR-09 | 排序切换「最热 \| 最新」换数据集 | 阅读器已加载 ≥2 页 | ① 点「最新」→ `mode=2` 请求，行整批替换、第一行是最新评论；② 点回「最热」→ **0** 新请求（热度序按「会话 + 块号」成链，整链命中缓存）；③ 再点「最新」→ 0 请求；④ 在「最新」滚 2 页 → 只有 `mode=2` 请求且行只追加 | [ADR-0004](../docs/adr/0004-reader-row-order-append-only.md) 补充、`EmbeddedComments.vue#switchOrder`、`crawl.ts#loadHotRootsPage` |
+| RDR-12 | 最热读到底的完整度与数字口径 | 已登录、阅读器默认「最热」 | 一路滚到「没有更多评论了」 | ① 徽章是**完整**，不是「不完整」；② 顶栏与列表头都显示平台声明总数（如 191），不显示「条目数 108」；③ 气泡说明「平台声明 N 条（含楼中楼的全部回复）；顶层 M 条根评论已全部取回，楼中楼按需展开」 | `EmbeddedComments.vue#completeness`、`EmbeddedComments.vue#commentCount` |
+| RDR-13 | 平台 412 限流：冷却可视化 + 自动重试 | 人为让 `wbi/main` 返回 412（或连续快速滚动触发） | 停在列表底部等 | ① 页脚/顶部显示「平台限流 · N 秒后自动重试（不是登录失效…）」而不是干巴巴的「加载失败」；② 到点自动重试并继续加载，无需手动点；③ 连续 4 次仍被限流则只留「重试」按钮，不再自动打 | `EmbeddedComments.vue#noteRateLimited`、[ADR-0010](../docs/adr/0010-shared-rate-limit.md) 2026-10-30 修订 |
 | RDR-08 | 定位的反例：同一视频开着多枚标签页 | 同一视频 URL 开着 ≥2 枚标签页 | 从工作台点「在评论区定位」 | 消息投给后台挑中的那一枚（按视频身份，不认「当前可见」），另一枚不动——这是已知语义，不是 bug | `.context/LESSONS.md` L-13、ADR-0008 |
 
 ## 2. 注入时序与站点改版（INJ）
@@ -61,7 +63,8 @@
 | CORE-03 | DNR 请求头改写真的生效 | 已装扩展 | 打开 Network 面板看扩展自身发出的 api 请求 | 带扩展形态的 `Origin`/`Referer`；缺规则时平台返回 `-403` 类错误 | `src/extension/background.ts`（`initiatorDomains: [chrome.runtime.id]`） |
 | CORE-04 | 缓存跨会话生效 | 已抓过一次同一视频 | 关闭再打开该视频页 | 首屏不再重复请求已有分页（命中缓存）；登录态变化时**不得**复用匿名的页缓存 | `src/core/crawl.ts`（页缓存键 + 账号隔离） |
 | CORE-05 | 工作台与阅读器共用一份存储（身份分键） | 登录态；同一视频先在放大镜窗口跑过完整分析 | 打开该视频页的阅读器滚前两页 | 已抓过的页不再回源（IDB 里同一组 `u:<mid>` 页键被两边共用）；`session` 与 `nav` 键按身份姿态分开（`*|page` / `*|direct`）互不覆盖 | `src/ui/services.ts#readerWorkbench`、`workbench.ts#loadSession`、`api.ts#loadNavData` |
-| CORE-06 | 跨文档同键单飞（Web Locks） | 同一视频同时开着阅读器与工作台 | 两边几乎同时触发同一页取数 | 平台只收到一次该页请求；另一边按磁盘命中返回 | `src/core/cache/index.ts#getOrLoad`（`locks.request`）、ADR-0009 |
+| CORE-06 | 跨文档同键单飞（Web Locks） | 同一视频同时开着阅读器与工作台 | 两边几乎同时触发同一页取数 | 平台只收到一次该页请求；另一边按磁盘命中返回 | `src/core/cache/index.ts#getOrLoad`（`locks.request`）、ADR-0009 |
+
 | CORE-08 | 共享令牌桶限速 | 工作台全量分析进行中 | ① 同时开阅读器翻页 → 总请求率 ≤ burst + rate·t；② bulk 只在水位 ≥1+reserve 时取令牌，interactive 总能拿到；③ 注入一次 rate-limited → 全文档共享 30s 冷却，重试不早于冷却结束；④ 中断全量后 10min 内重跑 → 已抓页命中，只补缺页 | src/core/rate-limit.ts、crawl.ts worker 池与 crawl-run 检查点、ADR-0010 |
 | CORE-07 | 定位未读评论端到端 | 工作台选中一条不在已读范围内的评论 | 点「在评论区定位」 | 评论流上方出现定位块（标题「定位到的评论」+ 根评论块）；目标行居中闪烁；主流行序不变；点 × 关闭块并允许缩高 | `workbench.ts#runLocate`、`src/platforms/bilibili/index.ts#seekRoot`、`EmbeddedComments.vue#locateComment`、ADR-0009 |
 

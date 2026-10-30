@@ -52,6 +52,8 @@ export interface SharedLimiterOptions {
   locks?: Pick<LockManager, 'request'> | null;
   now?: () => number;
   sleep?: SleepFn;
+  /** 等待抖动用的随机源（测试注入固定值，默认 Math.random）。 */
+  random?: () => number;
 }
 
 export interface SharedLimiter {
@@ -63,16 +65,20 @@ export interface SharedLimiter {
   noteSuccess(latencyMs?: number): Promise<void>;
 }
 
-const COOLDOWN_BASE_MS = 30_000;
+const COOLDOWN_BASE_MS = 60_000;
 const COOLDOWN_CAP_MS = 10 * 60_000;
 // AIMD（TCP 式速率自适）：起始 1 rps；每 5 个连续 <1500ms 的成功 +0.2；
-// rate-limited 或 >3000ms 的慢请求 ×0.5；地板 0.5、封顶 4。
+// rate-limited 或 >3000ms 的慢请求 ×0.5；地板 0.5、封顶 2（≈ 10 秒最多 20 个请求，接近真人翻页节奏）。
+// 封顶不是随手定的：登录态下 `wbi/main` 连续快速请求会触发平台风控（HTTP 412），
+// 而 412 一旦出现是账号 + IP 维度的，会连累正常浏览——宁可慢，不可像爬虫。
 const RATE_FLOOR = 0.5;
-const RATE_CEIL = 4;
+const RATE_CEIL = 2;
 const RATE_INCREASE = 0.2;
 const FAST_STREAK_TARGET = 5;
 const FAST_LATENCY_MS = 1500;
 const SLOW_LATENCY_MS = 3000;
+/** 等待时间的随机抖动：固定间隔本身就是机器人指纹。 */
+const WAIT_JITTER = 0.15;
 
 /** localStorage 存根：跨文档天然共享（同源扩展页面与 iframe 实测共享，见 ADR-0010）。 */
 export function localStorageLimiterStore(key: string): LimiterStore {
@@ -110,6 +116,7 @@ export function createSharedLimiter(options: SharedLimiterOptions): SharedLimite
   const { key, ratePerSec, burst, reserve } = options;
   const store = options.store ?? localStorageLimiterStore(key);
   const now = options.now ?? Date.now;
+  const random = options.random ?? Math.random;
   const sleep = options.sleep ?? ((ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       signal.removeEventListener('abort', onAbort);
@@ -152,17 +159,15 @@ export function createSharedLimiter(options: SharedLimiterOptions): SharedLimite
         const waitMs = await mutate((state) => {
           const at = now();
           if (at < state.cooldownUntil) return state.cooldownUntil - at;
-          if (priority === 'interactive') {
-            // interactive 永不等令牌：有就拿，没有也放行（只有共享冷却才挡）
-            if (state.tokens >= 1) state.tokens -= 1;
-            return 0;
-          }
-          const threshold = 1 + reserve;
+          // 交互优先只体现在水位线：批量要额外留出 reserve 给交互，交互拿 1 个令牌就走——但**两者都要排队**。
+          // 旧实现让交互「没令牌也放行」，于是快速滚动时阅读器完全不限速，是登录态撞 412 的主要来源之一。
+          const threshold = priority === 'interactive' ? 1 : 1 + reserve;
           if (state.tokens >= threshold) {
             state.tokens -= 1;
             return 0;
           }
-          return ((threshold - state.tokens) / state.rate) * 1000;
+          const base = ((threshold - state.tokens) / state.rate) * 1000;
+          return Math.round(base * (1 + (random() * 2 - 1) * WAIT_JITTER));
         });
         if (waitMs <= 0) return;
         onWait?.(waitMs);

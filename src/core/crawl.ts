@@ -287,19 +287,138 @@ export class CrawlRunner {
   }
 }
 
+/** 热度序游标的前缀：`hot:<会话 id>:<块号>`（平台 offset 原样放在会话 id 里）。 */
+const HOT_CURSOR_PREFIX = 'hot:';
+
 /**
- * 取一页顶层评论。按时间序的游标是纯位置，可按游标缓存；热度序不行——登录态下平台会把
- * **同一个 offset 连续返回多次**、在服务端会话里推进（实测原生请求同一 offset 4 次，回 19→20→6→0 条后 is_end）。
- * 按游标缓存会让重复的 offset 一直命中第一份结果、永远推进不了，所以热度序每页都回源、不读不写页缓存。
+ * 一条热度序会话（平台侧按登录用户 + 主体保存的翻页进度）。
+ *
+ * 为什么热度序不能像时间序那样「键 = 游标」：登录态下平台把**同一个 offset 连发多次**，在服务端会话里
+ * 逐块推进（实测同一 offset 依次回 18 / 20 / 6 / 0 条后 is_end；隔 60s 重发仍从会话当前进度继续，
+ * 不回放上一块），所以「第几块」只能由我们的块号表达。块按 (会话 id, 块号) 入缓存，
+ * 切序、重开阅读器都能整链命中（0 回源）；offset "" 才是开一条新会话（回到榜首）。
  */
-function loadRootsPage(
-  runner: CrawlRunner,
-  key: string,
-  order: RootOrder,
-  loader: (ctx: FetchContext) => Promise<Page<Comment>>,
-  options: LoadOptions,
-): Promise<Page<Comment>> {
-  return order === 'hot' ? runner.request(loader) : runner.load(key, 'page', loader, options);
+interface HotChain {
+  chainId: string;
+  /** 下一块该发给平台的 offset；null 表示平台已说没有下一块。 */
+  next: Cursor | null;
+  /** 已缓存的块数（块号 0..chunks-1 连续）。 */
+  chunks: number;
+  ended: boolean;
+  /** 首块的条目 id：会话被平台重置时会重回首块，用它认出来（不能把它当成「第 N 块」）。 */
+  firstIds: string[];
+}
+
+function hotChainKey(subject: string, account: string): string {
+  return cacheKey('pointer', 'roots-hot-chain', subject, account);
+}
+
+function hotChunkKey(subject: string, account: string, chainId: string, index: number): string {
+  return cacheKey('page', subject, account, 'roots', 'hot', chainId, index);
+}
+
+function hotCursorOf(chainId: string, index: number): Cursor {
+  return `${HOT_CURSOR_PREFIX}${chainId}:${index}`;
+}
+
+function parseHotCursor(cursor: Cursor | null): { chainId: string; index: number } | null {
+  if (cursor === null || !cursor.startsWith(HOT_CURSOR_PREFIX)) return null;
+  const rest = cursor.slice(HOT_CURSOR_PREFIX.length);
+  const split = rest.lastIndexOf(':');
+  if (split <= 0) return null;
+  const index = Number(rest.slice(split + 1));
+  if (!Number.isInteger(index) || index < 0) return null;
+  return { chainId: rest.slice(0, split), index };
+}
+
+/** 一页顶层评论的取数来源：键、排序、当前游标与回源函数。 */
+interface RootsPageSource {
+  /** `subjectKey(ref)`：页缓存与链记录的主键段。 */
+  subject: string;
+  /** 身份维度（`u:<mid>` / `anon`）：不同身份可见的评论集合不同，绝不混用。 */
+  account: string;
+  order: RootOrder;
+  cursor: Cursor | null;
+  /** 时间序的页缓存键（热度序不用它：按会话 + 块号自成一条链）。 */
+  key: string;
+  /** 按给定平台游标回源。热度序会用它取「下一块」，时间序只按入参游标取一次。 */
+  fetch: (cursor: Cursor | null) => (ctx: FetchContext) => Promise<Page<Comment>>;
+}
+
+/**
+ * 取一页顶层评论，按排序走两条语义不同的链：
+ * - **time（最新）**：游标是纯位置，页键 = 游标，命中即用缓存。
+ * - **hot（最热）**：见 `HotChain`；块按 (会话 id, 块号) 缓存，回放不产生请求。
+ */
+async function loadRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<Page<Comment>> {
+  if (source.order === 'time') return runner.load(source.key, 'page', source.fetch(source.cursor), options);
+  return loadHotRootsPage(runner, source, options);
+}
+
+async function loadHotRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<Page<Comment>> {
+  const fromStart = source.cursor === null;
+  const stored =
+    fromStart && options.force === true
+      ? undefined
+      : (await runner.cache.get<HotChain>(hotChainKey(source.subject, source.account)))?.value;
+  const parsed = parseHotCursor(source.cursor);
+
+  let chain: HotChain | undefined;
+  let index = 0;
+  if (parsed !== null) {
+    // 继续同一条会话：链记录对不上（过期 / 已被新会话取代）就当它断了，重新开链。
+    if (stored !== undefined && stored.chainId === parsed.chainId) {
+      chain = stored;
+      index = parsed.index;
+    }
+  } else if (stored !== undefined) {
+    // 换序 / 重开阅读器：这条会话还在新鲜期内，从块 0 起按块序回放。
+    chain = stored;
+  }
+
+  if (chain !== undefined) {
+    const cached = await runner.cache.get<Page<Comment>>(hotChunkKey(source.subject, source.account, chain.chainId, index));
+    if (cached !== undefined) {
+      const more = index + 1 < chain.chunks || !chain.ended;
+      return { items: cached.value.items, next: more ? hotCursorOf(chain.chainId, index + 1) : null };
+    }
+    // 块被淘汰（配额 / TTL 抖动）：这条链已经断了，别再往它上面接新块。
+    if (index < chain.chunks) chain = undefined;
+  }
+
+  // 新会话只能从平台起点开：offset "" 会让平台另开一条会话并回到榜首。
+  if (chain === undefined) return startHotChain(runner, source);
+  // 平台已经说完：这一链没有更多块了，界外请求一律按末页回答（不回到源站）。
+  if (chain.ended) return { items: [], next: null };
+
+  const page = await runner.request(source.fetch(chain.next));
+  const firstIds = new Set(chain.firstIds);
+  if (page.items.length > 0 && firstIds.size > 0 && page.items.every((item) => firstIds.has(item.id))) {
+    // 整页都是首块里的条目 = 平台把会话重置回了榜首（隔太久或被别的消费者走完），当新会话重来。
+    return startHotChain(runner, source);
+  }
+  const chunks = index + 1;
+  // 平台用「一页零条 + is_end」收官；零条也按到底处理，避免在空块上无限续链。
+  const ended = page.next === null || page.items.length === 0;
+  await runner.cache.set(hotChunkKey(source.subject, source.account, chain.chainId, index), page, 'page');
+  await runner.cache.set(
+    hotChainKey(source.subject, source.account),
+    { chainId: chain.chainId, next: page.next, chunks, ended, firstIds: chain.firstIds } satisfies HotChain,
+    'page',
+  );
+  return { items: page.items, next: ended ? null : hotCursorOf(chain.chainId, chunks) };
+}
+
+/** 开一条新的热度序会话：块 0 回源，链记录与块一起落缓存。 */
+async function startHotChain(runner: CrawlRunner, source: RootsPageSource): Promise<Page<Comment>> {
+  const page = await runner.request(source.fetch(null));
+  // 会话 id 取平台给的下一块 offset（里面带 session_id）；只有一块就没有会话可记，用一次性 id 占位。
+  const chainId = page.next ?? `single-${runner.deps.now()}`;
+  const ended = page.next === null || page.items.length === 0;
+  const chain: HotChain = { chainId, next: page.next, chunks: 1, ended, firstIds: page.items.map((item) => item.id) };
+  await runner.cache.set(hotChunkKey(source.subject, source.account, chainId, 0), page, 'page');
+  await runner.cache.set(hotChainKey(source.subject, source.account), chain, 'page');
+  return { items: page.items, next: ended ? null : hotCursorOf(chainId, 1) };
 }
 
 export interface SubjectCrawl {
@@ -361,9 +480,14 @@ export async function crawlSubject(
     throwIfAborted(runner.signal);
     const page: Page<Comment> = await loadRootsPage(
       runner,
-      cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
-      order,
-      (ctx) => adapter.listRoots(subject, cursor, order, ctx),
+      {
+        subject: subjectKey(ref),
+        account,
+        order,
+        cursor,
+        key: cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
+        fetch: (at) => (ctx) => adapter.listRoots(subject, at, order, ctx),
+      },
       pageOptions,
     );
     const rootsBefore = roots.length;
@@ -513,9 +637,14 @@ export async function crawlRootsPage(
   const usePageCache = options.refresh === 'cache-first';
   const page = await loadRootsPage(
     runner,
-    cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
-    order,
-    (ctx) => adapter.listRoots(subject, cursor, order, ctx),
+    {
+      subject: subjectKey(ref),
+      account,
+      order,
+      cursor,
+      key: cacheKey('page', subjectKey(ref), account, 'roots', order, cursor ?? 'start'),
+      fetch: (at) => (ctx) => adapter.listRoots(subject, at, order, ctx),
+    },
     usePageCache ? {} : { force: true },
   );
 

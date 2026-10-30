@@ -20,6 +20,7 @@ function env(rate: { ratePerSec?: number; burst?: number; reserve?: number } = {
     store,
     locks: null, // 单进程串行链即可验证语义
     now: () => now,
+    random: () => 0.5, // 抖动取中点 = 0，等待时长可精确断言
     sleep: async (ms: number) => {
       sleeps.push(ms);
       now += ms;
@@ -38,7 +39,7 @@ function env(rate: { ratePerSec?: number; burst?: number; reserve?: number } = {
 }
 
 describe('createSharedLimiter', () => {
-  it('两个实例共享一个桶：burst 3 之后按 rate 逐秒补充，合起来不超发', async () => {
+  it('两个实例共享一个桶：burst 用完之后交互也要等，合起来不超发', async () => {
     const { a, b, signal, sleeps, shared } = env();
     // 瞬间取 3 个令牌（两实例交错）——同一 store，不重复发
     await a.acquire('interactive', signal);
@@ -46,18 +47,14 @@ describe('createSharedLimiter', () => {
     await a.acquire('interactive', signal);
     expect(sleeps).toEqual([]);
     expect(shared.state!.tokens).toBe(0);
-    // interactive 永不等令牌：第 4/5 个照拿不误（不睡、令牌可为负方向逼近 0）
+    // 令牌用完就排队（旧实现让交互无令牌也放行 = 阅读器快速滚动时完全不限速）
     await a.acquire('interactive', signal);
+    expect(sleeps).toEqual([1000]);
     await b.acquire('interactive', signal);
-    expect(sleeps).toEqual([]);
-    // bulk 才等：tokens 不足 1+reserve 时睡到补充够
-    await a.acquire('bulk', signal);
-    await b.acquire('bulk', signal);
-    expect(sleeps.length).toBe(2);
-    expect(sleeps.every((ms) => ms > 0)).toBe(true);
+    expect(sleeps).toEqual([1000, 1000]);
   });
 
-  it('bulk 只在 tokens >= 1 + reserve 时取：interactive 永远有令牌', async () => {
+  it('交互水位线是 1、批量是 1 + reserve：批量让路，但两者都受同一个桶约束', async () => {
     const { a, b, signal, sleeps, shared } = env({ burst: 3, reserve: 1 });
     // burst=3 / reserve=1：bulk 两次取到 tokens=1，第三次必须等补充到 2
     await a.acquire('bulk', signal);
@@ -65,20 +62,21 @@ describe('createSharedLimiter', () => {
     expect(shared.state!.tokens).toBe(1);
     await a.acquire('bulk', signal);
     expect(sleeps).toEqual([1000]); // 等 1s 才凑够 2 个令牌
-    // interactive 不受 reserve 限制：tokens 不够 2 也照拿
+    // 交互不受 reserve 限制：1 个令牌就够，不用再等
     await b.acquire('interactive', signal);
     expect(sleeps).toHaveLength(1);
+    expect(shared.state!.tokens).toBe(0);
   });
 
-  it('rate-limited → 冷却共享给所有实例，按 30s·2^(n-1) 退避封顶 10min', async () => {
+  it('rate-limited → 冷却共享给所有实例，按 60s·2^(n-1) 退避封顶 10min', async () => {
     const { a, b, signal, sleeps } = env();
     await a.acquire('interactive', signal);
-    await a.noteRateLimited(); // strike 1 → 30s
+    await a.noteRateLimited(); // strike 1 → 60s
     await b.acquire('interactive', signal); // 另一实例同样等到冷却结束
-    expect(sleeps.at(-1)).toBe(30_000);
-    await b.noteRateLimited(); // strike 2 → 60s
-    await a.acquire('interactive', signal);
     expect(sleeps.at(-1)).toBe(60_000);
+    await b.noteRateLimited(); // strike 2 → 120s
+    await a.acquire('interactive', signal);
+    expect(sleeps.at(-1)).toBe(120_000);
     for (let i = 0; i < 10; i++) await a.noteRateLimited();
     await b.acquire('interactive', signal);
     expect(sleeps.at(-1)).toBe(600_000); // 封顶 10 分钟
@@ -87,9 +85,9 @@ describe('createSharedLimiter', () => {
   it('Retry-After 大于退避时以它为准', async () => {
     const { a, b, signal, sleeps } = env();
     await a.acquire('interactive', signal);
-    await a.noteRateLimited(45_000);
+    await a.noteRateLimited(120_000);
     await b.acquire('interactive', signal);
-    expect(sleeps.at(-1)).toBe(45_000);
+    expect(sleeps.at(-1)).toBe(120_000);
   });
 
   it('缓存命中不消耗令牌：acquire 只服务真实回源（调用方约定）', async () => {

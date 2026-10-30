@@ -27,4 +27,5 @@
 - **评论行放大镜不按评论量判定**：能解析出 rpid 的原生评论操作行一律注入放大镜，「分析评论区」（视频级）与「分析评论树」（评论行）两个按钮都不受数量控制；自绘阅读器里的「图谱」入口总是渲染、默认隐于行右端，悬停该行或该行被选中才显现（不占版面、不与操作行抢宽度）。
 - **视频页按钮的宿主容器一次性追加**：按钮先装进自有 `.loupe-host` 再整体插入原生操作行 —— 站点那侧只此一次写入，此后容器内部怎么变都与站点无关。
 
-- **跨文档共享令牌桶限速（ADR-0010）**：localStorage+Web Locks 令牌桶（1rps/burst 3/reserve 1，bilibili），interactive 优先于 bulk；rate-limited 冷却共享；worker 池代批切片；crawl-run 检查点 + freshAfter 可恢复抓取。
+- **跨文档共享令牌桶限速（ADR-0010，2026-10-30 修订）**：localStorage+Web Locks 令牌桶（1rps/burst 3/reserve 1，bilibili），interactive 只在水位线上优先（也排队）、AIMD 封顶 2rps；rate-limited 冷却 60s 起倍增并共享；worker 池代批切片；crawl-run 检查点 + freshAfter 可恢复抓取。
+- **热度序按会话成链缓存（2026-10-30）**：`mode=3` 是平台侧有状态分页，游标自编成 `hot:<会话 id>:<块号>`，块按 (会话, 块号) 缓存；平台完链后界外不回源，会话被重置则另开一条。

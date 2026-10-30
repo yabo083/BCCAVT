@@ -142,3 +142,25 @@
 2. **量颜色要等过渡走完**：`getComputedStyle` 读的是**过渡中间值**。切换 `data-theme` 后立刻读带 `transition: color` 的元素，拿到的是旧主题的颜色（实测 rail 激活色在深色下读成浅色值，等 450ms 后才是 `#6fd8d4`）——差点把「主题没生效」写成 bug。
 
 **相关位置**：`src/ui/ConfigPopup.vue`（设置项的写入与回显）、`src/ui/theme.ts#watchPalette`（跨文档跟随 + 卸载钩子）、`src/ui/EmbeddedComments.vue`、`src/ui/components/PageCommentRow.vue`、`src/extension/content/injector.ts`、`tests/ui/embedded-comments-reader.test.ts`、`tests/ui/embedded-comments-write.test.ts`（chrome 桩要带 `storage.local.get` 与 `onChanged`）。
+
+## L-16 热度序的翻页位置在平台侧会话里，不在 offset 里（2026-10-30，Chrome 156 + 登录态）
+
+- **现象**：自绘评论区「最热」翻到第二页之后要么反复拿到第一页、要么在重复 offset 被当成环提前收尾；把 offset 加进缓存键也没用（同一 offset 命中第一份结果）。
+- **根因（实测）**：登录态下 `/x/v2/reply/wbi/main` 的 `mode=3` 是**有状态**分页——`offset=""` 开一条新会话（`next_offset` 里带 `session_id`，回榜首）；之后**同一个 offset 连发多次**，服务端按会话指针逐块推进（BV13PshzEEFd 依次回 18 / 20 / 6 / 0 条后 `is_end`）。隔 60s 重发同一个 offset 仍从**会话当前进度**继续（不回放上一块）；重新发 `offset=""` 会另开一条会话并回到榜首（19 条，与首块同集合）。
+- **修复**：游标改成自己的 `hot:<会话 id>:<块号>`，块按 (会话, 块号) 入页缓存（`crawl.ts#loadHotRootsPage`）：回放不产生请求；续块用链记录里的 offset；整页都是首块条目 ⇒ 会话被平台重置，开新会话重来；平台说 `is_end` 或回零条 ⇒ 链结束，界外页不回源。
+- **判据**：真机「最热」滚到底 64 条根评论，切「最新」再切回「最热」**0 回源**，**重开视频页整条链 0 回源**。
+- **教训**：分页游标不要假定「同游标 ⇒ 同内容」。先问一句「这个位置是客户端算的还是服务端记的」，答案决定缓存键是游标还是**序号**。
+
+## L-17 阅读器「不完整」的两个真根因：声明数是全部后代 + 交互请求绕开限速（2026-10-30）
+
+- **现象 1**：登录态、明明读到底了，徽章还是「不完整 108 / 191」；用户读成「没取到全部评论」。
+- **根因 1**：`stat.reply` / 完整度里的声明数包含**楼中楼的全部后代**，而根评论的 `replyCount` 只算直接回复 ⇒ `Σ(1+replyCount)` 恒小于声明数（BV13PshzEEFd：64 根 + 直接回复 44 = 108，差的 83 是二级以后的回复）。同时 `commentCount` 取的 `items.length` 里还夹着楼中楼预览，108 这个数字本身也不是评论数。
+- **修复 1**：完整度只认平台自己的「还有没有下一页」（`hasNext` + `endReason` + 身份限制），声明数只用来在气泡里解释数字差在哪；`commentCount` 只数顶层；顶栏与列表头统一显示平台声明总数。
+- **判据 1**：两种排序在该视频都只回 64 条根评论（= 原生 DOM 的 64 个 `bili-comment-thread-renderer`），徽章为**完整**。
+- **现象 2**：登录态下间歇 `HTTP 412`，「明明登录着却取不到评论」，手动连点重试越点越糟。
+- **根因 2**：`acquire('interactive')` 的旧语义是「有令牌就拿，没有也放行」——阅读器快速滚动时**完全不经过令牌桶**，桶只挡住了批量抓取；AIMD 封顶 4 rps 也远超真人节奏。
+- **修复 2**：交互也排队（水位线：交互 `tokens>=1`、批量 `tokens>=1+reserve`），AIMD 封顶 2 rps、等待 ±15% 抖动、冷却起点 60s；阅读器把冷却做成倒计时 + 到点自动重试（连续 4 次才交回按钮）。
+- **探针坑（同批）**：`chrome.runtime.reload()` 之后扩展会进入 `chrome-error://chromewebdata/`（所有扩展页 404，`chrome.storage` 也不可用），必须**整机重启调试浏览器**；杀进程只杀 `--user-data-dir=…tmp\chrome-login` 那棵树，别误杀用户自己的 Chrome。
+- **判据 2**：单测覆盖倒计时文案 → 到点自动重试 → 行出现；真机本轮全程未再触发 412。
+
+**相关位置**：`src/core/crawl.ts#loadHotRootsPage`、`src/core/rate-limit.ts#createSharedLimiter`、`src/ui/EmbeddedComments.vue#completeness` / `#noteRateLimited`、[ADR-0010](../docs/adr/0010-shared-rate-limit.md)、`tests/core/roots-page.test.ts`、`tests/ui/embedded-comments-reader.test.ts`。

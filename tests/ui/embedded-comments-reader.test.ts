@@ -25,6 +25,7 @@ import {
   isReaderHeightMessage,
 } from '@/extension/page-comments';
 import type { RootsPage } from '@/core/report';
+import { PlatformError } from '@/core/errors';
 import type { Comment, Subject, SubjectRef } from '@/core/model';
 import { ROW_PAGE_SIZE } from '@/ui/thread';
 
@@ -595,24 +596,53 @@ describe('加载指示与完整度说明', () => {
     const wrapper = await open();
 
     const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
-    expect(label).toContain('平台声明 100 条评论，顶层与各楼回复合计只能读到 3 条');
     expect(label).toContain(limitation);
+    expect(label).toContain('平台声明 100 条');
+    expect(label).not.toContain('已全部取回');
     expect(wrapper.text()).toContain('不完整');
   });
 
-  it('顶层读到底、只是楼中楼没展开：不算「不完整」（和原生一样按需展开）', async () => {
-    // 平台声明 100 条 = 2 条顶层 + 两楼各自声明的 49 条回复
+  it('平台 412 限流：摆出倒计时并自动重试，而不是让人对着「加载失败」反复手点', async () => {
+    vi.useFakeTimers();
+    try {
+      planPages([{ cursor: null, comments: [ROOT, SECOND], next: null }]);
+      mocks.previewRootsPage.mockRejectedValueOnce(
+        new PlatformError('rate-limited', '平台限额：HTTP 412', { code: 412 }),
+      );
+      const wrapper = mount(EmbeddedComments, { attachTo: document.body });
+      await settle();
+
+      // 首屏失败但限流有专门的文案：说清「不是登录失效」，并给出自动重试时间
+      expect(wrapper.text()).toContain('平台限流');
+      expect(wrapper.text()).toContain('秒后自动重试');
+      expect(wrapper.text()).toContain('不是登录失效');
+      expect(wrapper.text()).not.toContain('加载失败');
+
+      // 到点自动重试：不需要任何点击，行自己出来
+      await vi.advanceTimersByTimeAsync(61_000);
+      await settle();
+      expect(rowKinds(wrapper)).toEqual(['顶层一', '顶层二']);
+      expect(wrapper.text()).not.toContain('平台限流');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('顶层读到底就是完整：平台声明数含楼中楼的全部回复，不能拿它逐条对账', async () => {
+    // 实测形态：64 条根评论、根评论的直接回复合计 44（声明 191 = 根 + 全部层级的回复）
     planPages([
       {
         cursor: null,
-        comments: [makeComment({ ...ROOT, replyCount: 49 }), makeComment({ ...SECOND, replyCount: 49 })],
+        comments: [makeComment({ ...ROOT, replyCount: 22 }), makeComment({ ...SECOND, replyCount: 22 })],
         next: null,
       },
     ]);
     const wrapper = await open();
 
     const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
-    expect(label).not.toContain('平台声明 100 条评论');
+    expect(label).toContain('平台声明 100 条评论（含楼中楼的全部回复）');
+    expect(label).toContain('顶层 2 条根评论已全部取回');
+    expect(wrapper.text()).toContain('完整');
     expect(wrapper.text()).not.toContain('不完整');
   });
 

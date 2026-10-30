@@ -337,38 +337,109 @@ const locatedRows = computed<ThreadRow[]>(() => {
   return node === undefined ? [] : flattenThread(node, collapsed.value);
 });
 const title = computed(() => subject.value?.title ?? '');
-const commentCount = computed(() => pagerState.value.items.length);
+/**
+ * 已取回的**顶层**评论数。分页条目里还夹着楼中楼预览（`rootId !== null`），
+ * 把 items.length 当「评论数」显示会和平台总数对不上（实测 64 条根评论 + 44 条预览显示成 108）。
+ */
+const commentCount = computed(() => pagerState.value.items.filter((comment) => comment.rootId === null).length);
 /**
  * 最近一页带回的「身份限制」（例如未登录会被平台截断成几条并直接说「到底」）。
  * 它随页带回、随换目标清空——完整性必须能解释「为什么只有这几条」，不能只给一个数字对不上。
  */
 const identityLimitations = ref<readonly string[]>([]);
 /**
- * 完整度：平台还给出下一页游标之前都算「还没读完」；到底之后再按平台声明的总数核对一次
- * （声明数包含被删除 / 被折叠的评论，因此「到底但少于声明」不是错误，只是事实），
- * 并把本次读取的身份限制（未登录截断等）一并写进原因。
+ * 完整度只回答一个问题：**顶层评论读完了没有**。
+ *
+ * 判据是平台自己给的两个信号——还有下一页游标？最后一页是否平台说「到底」？到顶即完整。
+ * 不能拿「平台声明的评论总数」逐条对账：那个数是**全部后代**（根 + 楼中楼的所有层级），
+ * 而根评论的 `replyCount` 只算直接回复，两者相加永远小于声明数（实测 64 条根评论 + 直接回复
+ * 合计 108，平台声明 191，差的 83 是被折叠层级的回复）——照它判就会在明明读全了的时候报「不完整」。
+ * 声明数只用来在气泡里解释数字差在哪，且出现在真的读少了（未登录截断 / 游标环）时才升级为告警。
  */
 const completeness = computed<Completeness>(() => {
   const declaredTotal = progress.value?.declared;
-  const fetched = pagerState.value.items.length;
+  const roots = commentCount.value;
   if (hasNext.value) {
-    return { declared: declaredTotal, fetched, truncated: true, reasons: ['还没读完：滚到底会自动接着取下一页'] };
+    return { declared: declaredTotal, fetched: roots, truncated: true, reasons: ['还没读完：滚到底会自动接着取下一页'] };
   }
-  // 楼中楼和原生一样按需展开：顶层读到底时，以「顶层 + 各楼声明的回复数」核对平台总数，
-  // 没展开的回复不算缺失（否则 65 条顶层全读完也会显示「不完整 77 / 191」）。
-  let reachable = 0;
-  for (const item of pagerState.value.items) {
-    if (item.rootId === null) reachable += 1 + item.replyCount;
+  const blocking: string[] = [];
+  if (pagerState.value.endReason !== null) blocking.push(pagerState.value.endReason);
+  const short = declaredTotal !== undefined && roots < declaredTotal;
+  // 身份限制（未登录时平台会把顶层评论截断成几条并直接说「到底」）才是真的没读到。
+  if (short) {
+    for (const limitation of identityLimitations.value) if (!blocking.includes(limitation)) blocking.push(limitation);
   }
-  const unproven = declaredTotal === undefined || reachable < declaredTotal;
-  const reasons: string[] = [];
-  if (pagerState.value.endReason !== null) reasons.push(pagerState.value.endReason);
-  if (declaredTotal !== undefined && reachable < declaredTotal) reasons.push(`平台声明 ${declaredTotal} 条评论，顶层与各楼回复合计只能读到 ${reachable} 条`);
-  if (unproven) {
-    for (const limitation of identityLimitations.value) if (!reasons.includes(limitation)) reasons.push(limitation);
+  const notes: string[] = [];
+  if (blocking.length === 0 && short) {
+    notes.push(`平台声明 ${declaredTotal} 条评论（含楼中楼的全部回复）；顶层 ${roots} 条根评论已全部取回，楼中楼展开时按需取回`);
   }
-  return { declared: declaredTotal, fetched: reachable, truncated: reasons.length > 0, reasons };
+  return { declared: declaredTotal, fetched: roots, truncated: blocking.length > 0, reasons: [...blocking, ...notes] };
 });
+/**
+ * 平台限流（HTTP 412 / 429）后的自动恢复。
+ *
+ * 平台的风控不是登录失效：同一身份在很短时间里打太多 `wbi/main` 就会被 412，之后几十秒内连正常请求
+ * 一起拒。源头限速与冷却在共享令牌桶（`src/core/rate-limit.ts`）；这里只把那段冷却摆到用户面前、
+ * 到点自动重试一次，而不是让人对着「加载失败」反复手点——每点一次都是往风控窗口里再加一笔。
+ * 连续几次仍被限流就收手，只留倒计时与「重试」按钮。
+ */
+const RATE_LIMIT_BASE_MS = 60_000;
+const RATE_LIMIT_CAP_MS = 10 * 60_000;
+const RATE_LIMIT_RETRY_LIMIT = 4;
+const rateLimit = ref<{ until: number } | null>(null);
+const rateLimitRemaining = ref(0);
+let rateLimitAttempts = 0;
+let rateLimitTimer: ReturnType<typeof setTimeout> | undefined;
+let rateLimitTicker: ReturnType<typeof setInterval> | undefined;
+
+const rateLimitText = computed(() => {
+  if (rateLimit.value === null) return '';
+  const suffix = '（不是登录失效：平台对短时间内的高频请求做了风控）';
+  return rateLimitRemaining.value > 0
+    ? `${Math.ceil(rateLimitRemaining.value / 1000)} 秒后自动重试${suffix}`
+    : `平台仍在限流，点「重试」再试${suffix}`;
+});
+
+function clearRateLimit(): void {
+  if (rateLimitTimer !== undefined) clearTimeout(rateLimitTimer);
+  if (rateLimitTicker !== undefined) clearInterval(rateLimitTicker);
+  rateLimitTimer = undefined;
+  rateLimitTicker = undefined;
+  rateLimit.value = null;
+  rateLimitRemaining.value = 0;
+}
+
+/** 记一次限流并排下一次自动重试；超出次数上限就只留倒计时，不再自动打。 */
+function noteRateLimited(error: PlatformError): void {
+  rateLimitAttempts += 1;
+  const backoff = Math.min(RATE_LIMIT_CAP_MS, RATE_LIMIT_BASE_MS * 2 ** (rateLimitAttempts - 1));
+  const wait = Math.max(error.retryAfterMs ?? 0, backoff);
+  clearRateLimit();
+  rateLimit.value = { until: Date.now() + wait };
+  rateLimitRemaining.value = wait;
+  rateLimitTicker = setInterval(() => {
+    rateLimitRemaining.value = Math.max(0, (rateLimit.value?.until ?? 0) - Date.now());
+    if (rateLimitRemaining.value === 0 && rateLimitTicker !== undefined) {
+      clearInterval(rateLimitTicker);
+      rateLimitTicker = undefined;
+    }
+  }, 250);
+  if (rateLimitAttempts > RATE_LIMIT_RETRY_LIMIT) return;
+  rateLimitTimer = setTimeout(() => {
+    rateLimitTimer = undefined;
+    if (stale.value || rateLimit.value === null) return;
+    // 保留 attempts：连续被限流时下一次等待按指数延长
+    clearRateLimit();
+    void retry();
+  }, wait);
+}
+
+/** 用户主动重试：取消倒计时，立刻从失败的那一页再打一次。 */
+function retryNow(): void {
+  clearRateLimit();
+  void retry();
+}
+
 /** 顶部错误：扩展失效 > 首屏取数失败（还没有任何内容）> 展开回复 / 打开图谱这类操作失败。 */
 const loadError = computed<string | null>(() => {
   if (stale.value) return STALE_EXTENSION;
@@ -501,6 +572,7 @@ function cancel(): void {
   canceled = true;
   controller?.abort();
   controller = null;
+  clearRateLimit();
 }
 
 /**
@@ -547,6 +619,9 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
     }
     // 身份限制（未登录截断等）随页带回：到底时完整性原因里要能说出「为什么只有这几条」
     identityLimitations.value = page.limitations ?? [];
+    // 这一页真的落定了：限流计数归零，之前的倒计时一并撤掉
+    rateLimitAttempts = 0;
+    if (rateLimit.value !== null) clearRateLimit();
     return { items: page.comments, next: page.next };
   } catch (caught) {
     if (abort.signal.aborted) {
@@ -555,6 +630,8 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
       interrupted.name = CANCELED_ERROR_NAME;
       throw interrupted;
     }
+    // 平台限流不是「这一页有错」：先摆出冷却倒计时，到点自动重试（见 noteRateLimited）
+    if (caught instanceof PlatformError && caught.kind === 'rate-limited') noteRateLimited(caught);
     throw new Error(failMessage(caught, '加载失败，请重试'));
   } finally {
     if (controller === abort) controller = null;
@@ -606,6 +683,8 @@ async function loadFirstPage(): Promise<void> {
  */
 async function resetTarget(): Promise<void> {
   pager.reset();
+  clearRateLimit();
+  rateLimitAttempts = 0;
   // 新目标的身份由下一取数落定（在 fetchPage 解析之后写入）
   targetId = null;
   collapsed.value = new Set<string>();
@@ -649,6 +728,7 @@ async function switchOrder(next: RootOrder): Promise<void> {
   // 旧序的在途请求作废：abort 让它走取消判定，generation++ 保证晚到的结果也进不了新状态
   controller?.abort();
   controller = null;
+  clearRateLimit();
   pager.reset();
   collapsed.value = new Set<string>();
   selectedId.value = null;
@@ -1260,6 +1340,7 @@ onBeforeUnmount(() => {
   unwatchPalette?.();
   unwatchPalette = null;
   cancel();
+  clearRateLimit();
   // 用户卡片不用在这里收：槽位被拆时内容脚本自己会做全局收起（dismissUserCard）
   writes.dropAll('阅读器已关闭');
   readerHttp.dropAll('阅读器已关闭');
@@ -1276,8 +1357,8 @@ onBeforeUnmount(() => {
       <span v-if="title" class="subtle small ellipsis" :title="title">{{ title }}</span>
       <span class="grow" />
       <IconCircleNotch v-if="expanding.size > 0" class="spinner" role="img" aria-label="正在加载这条评论的回复" title="正在加载这条评论的回复" />
-      <CompletenessBadge v-if="hasItems" :completeness="completeness" />
-      <span v-if="hasItems" class="count tnum">{{ formatCount(commentCount) }} 条评论</span>
+      <CompletenessBadge v-if="hasItems" :completeness="completeness" compact />
+      <span v-if="hasItems" class="count tnum">{{ formatCount(declared ?? commentCount) }} 条评论</span>
       <span class="bar-tools row">
         <button
           type="button"
@@ -1326,10 +1407,10 @@ onBeforeUnmount(() => {
     </header>
 
     <p v-if="loadError" class="status row wrap small">
-      <span class="chip chip-error">加载失败</span>
-      <span>{{ loadError }}</span>
+      <span class="chip" :class="rateLimit ? 'chip-warning' : 'chip-error'">{{ rateLimit ? '平台限流' : '加载失败' }}</span>
+      <span>{{ rateLimit ? rateLimitText : loadError }}</span>
       <span class="grow" />
-      <button v-if="!stale" type="button" class="btn btn-sm btn-ghost" :disabled="running" @click="retry">
+      <button v-if="!stale" type="button" class="btn btn-sm btn-ghost" :disabled="running" @click="retryNow">
         重试
       </button>
       <button type="button" class="btn btn-sm btn-tonal" @click="restoreNative">恢复原版评论</button>
@@ -1463,10 +1544,10 @@ onBeforeUnmount(() => {
         </button>
         <template v-else-if="pageError">
           <span class="row small">
-            <span class="chip chip-error">加载失败</span>
-            <span>{{ pageError }}</span>
+            <span class="chip" :class="rateLimit ? 'chip-warning' : 'chip-error'">{{ rateLimit ? '平台限流' : '加载失败' }}</span>
+            <span>{{ rateLimit ? rateLimitText : pageError }}</span>
           </span>
-          <button type="button" class="btn btn-sm btn-ghost" @click="retry">重试</button>
+          <button type="button" class="btn btn-sm btn-ghost" @click="retryNow">重试</button>
         </template>
         <span v-else-if="running" class="row small subtle">
           <IconCircleNotch class="spinner" aria-hidden="true" />

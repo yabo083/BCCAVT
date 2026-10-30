@@ -159,22 +159,74 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     expect(adapter.calls.roots).toBe(2);
   });
 
-  it('hot 序不按游标缓存：平台重复给同一个 offset 时每次都回源、拿到新的一页', async () => {
+  it('热度序按会话 + 块号成链：同一 offset 连发时块块推进，回放整链 0 回源', async () => {
     const adapter = new FakeAdapter();
-    let call = 0;
-    // 登录态热度序：同一个 offset 连续返回，平台在服务端会话里推进
+    let round = 0;
+    // 登录态热度序：平台一直回同一个 offset，在服务端会话里逐块推进
     adapter.rootsProvider = () => {
-      call += 1;
-      return { items: [makeComment({ id: `h${call}` })], next: 'same-offset' };
+      round += 1;
+      return round <= 3 ? { items: [makeComment({ id: `h${round}` })], next: 'same-offset' } : { items: [], next: null };
     };
     const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
 
-    const first = await workbench.previewRootsPage(adapter.subject.ref, 'same-offset', options({ order: 'hot' }), noop, signal());
-    const second = await workbench.previewRootsPage(adapter.subject.ref, 'same-offset', options({ order: 'hot' }), noop, signal());
+    const first = await read(null);
+    const second = await read(first.next);
+    const third = await read(second.next);
+    const end = await read(third.next);
 
-    expect(adapter.calls.roots).toBe(2);
-    expect(first.roots.map((c) => c.id)).toEqual(['h1']);
-    expect(second.roots.map((c) => c.id)).toEqual(['h2']);
+    expect([first.roots[0]?.id, second.roots[0]?.id, third.roots[0]?.id]).toEqual(['h1', 'h2', 'h3']);
+    expect(end.next).toBeNull();
+    expect(adapter.rootCursors).toEqual([null, 'same-offset', 'same-offset', 'same-offset']);
+
+    // 换序 / 重开阅读器都从 null 重新走一条链：块序与内容原样回放，一个请求都不再发
+    const calls = adapter.calls.roots;
+    const replay: Array<string | null> = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 6 && (i === 0 || cursor !== null); i++) {
+      const page = await read(cursor);
+      replay.push(page.roots[0]?.id ?? null);
+      cursor = page.next;
+    }
+    expect(replay).toEqual(['h1', 'h2', 'h3', null]);
+    expect(adapter.calls.roots).toBe(calls);
+  });
+
+  it('会话被平台重置回榜首时按新会话重来，不把首块当成后一块', async () => {
+    const adapter = new FakeAdapter();
+    const script: Array<Array<string>> = [['a'], ['b'], ['a'], ['c']];
+    adapter.rootsProvider = () => {
+      const ids = script.shift() ?? [];
+      return { items: ids.map((id) => makeComment({ id })), next: 'same-offset' };
+    };
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
+
+    const first = await read(null);
+    const second = await read(first.next);
+    const third = await read(second.next);
+
+    expect([first.roots[0]?.id, second.roots[0]?.id, third.roots[0]?.id]).toEqual(['a', 'b', 'c']);
+    // 第三次请求回的是首块（a）⇒ 判定会话被重置，另开一条会话（null）重取
+    expect(adapter.rootCursors).toEqual([null, 'same-offset', 'same-offset', null]);
+  });
+
+  it('平台在热度序里说完之后不再回源：链的界外页也按末页回答', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = () => ({ items: [makeComment({ id: 'only' })], next: null });
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+
+    const page = await workbench.previewRootsPage(adapter.subject.ref, null, hot, noop, signal());
+    expect(page.next).toBeNull();
+    expect(adapter.calls.roots).toBe(1);
+
+    const replay = await workbench.previewRootsPage(adapter.subject.ref, null, hot, noop, signal());
+    expect(replay.roots.map((comment) => comment.id)).toEqual(['only']);
+    expect(replay.next).toBeNull();
+    expect(adapter.calls.roots).toBe(1);
   });
 
   it('未知的排序值在公开入口被拒绝', async () => {
