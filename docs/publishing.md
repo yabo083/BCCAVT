@@ -46,7 +46,10 @@ npm run publish        # 补齐后：上传并提交发布
 
 ## 三、后台仍需人工补齐（API 无法替代，缺则审核打回或卡在草稿）
 
-- **隐私政策 URL**：Loupe 读取评论、按登录态执行点赞/回复、可选把摘录发往用户自配 AI 端点，必须提供。当前用公开 gist：隐私政策 `https://gist.github.com/yabo083/f64000377a494ba17e30e13f718a92a1#file-privacy-md`、服务条款 `…#file-terms-md`（正文与 `docs/privacy-policy.html` 一致）；OAuth 品牌页的「应用首页」填仓库 `https://github.com/yabo083/BCCAVT`，已获授权的网域只需 `github.com`。
+- **隐私政策 URL**：Loupe 读取评论、按登录态执行点赞/回复、可选把摘录发往用户自配 AI 端点，必须提供。
+  - 现在挂在 **GitHub Pages 用户站**：<https://yabo083.github.io/>（仓库 `yabo083/yabo083.github.io`，`index.html` 落地页 + `privacy.html` + `terms.html` + Search Console 验证文件）。
+  - OAuth 品牌页三项都指向这里：首页 `https://yabo083.github.io/`、隐私政策 `…/privacy.html`、服务条款 `…/terms.html`；**已获授权的网域只能填 `yabo083.github.io`**——填 `github.com` 会报「网域未注册到您名下」，填 `chromewebstore.google.com` 会要求授权 `google.com`（不可能）。
+  - 域名归属用 **Search Console 的 URL 前缀资源** `https://yabo083.github.io/` + HTML 文件验证（文件已在站点根目录，删了会掉验证）。
 - **商店素材**：至少一张 1280×800 截图、简介、详细描述。
 - **Data safety 表单**：如实声明收集/传输/是否出售。
 - **权限用途说明**：宽主机权限（可选 `<all_urls>`，用于用户自配 AI 端点）与写操作要讲清。
