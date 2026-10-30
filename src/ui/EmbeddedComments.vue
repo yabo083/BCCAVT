@@ -33,6 +33,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import IconArrowClockwise from '~icons/ph/arrow-clockwise';
 import IconArrowsIn from '~icons/ph/arrows-in';
 import IconArrowsOut from '~icons/ph/arrows-out';
+import IconCaretDown from '~icons/ph/caret-down';
 import IconCircleNotch from '~icons/ph/circle-notch';
 import IconTreeStructure from '~icons/ph/tree-structure';
 import IconX from '~icons/ph/x';
@@ -96,8 +97,12 @@ import type {
   RefreshMode,
 } from '@/core/report';
 
-/** 展开一条评论时最多取这么多回复；再多请用放大镜在独立窗口里看完整树。 */
-const EXPANDED_REPLIES = 200;
+/**
+ * 每棵树一次只取这么多条回复（一页）。楼中楼按页取、按页放，和 B 站原生一致：
+ * 一条评论上千条回复时，一次全取会把请求和渲染都拖垮。取到窗口上限后，
+ * 树尾会出现一条「还有 N 条回复」，点了再往下取一页。
+ */
+const REPLY_PAGE = 20;
 /**
  * 提前量的下限（宿主视口高度未知时用它）：宿主视口底边距已渲染内容底部小于它，就去取下一页。
  * 实际上限是**一屏**（`prefetchMargin`）——距底还有一屏就预取，把一次 RTT 藏进用户还在滚的那段时间里；
@@ -311,6 +316,14 @@ const roots = computed<CommentNode[]>(() => {
   return ordered;
 });
 const rows = computed(() => roots.value.flatMap((root) => flattenThread(root, collapsed.value)));
+/** 每棵树本轮要取到多少条回复：`REPLY_PAGE` 起步，点「还有 N 条回复」按页增长。 */
+const replyWindow = ref(new Map<string, number>());
+/**
+ * 已经「取到头」的树：平台声明的回复数常常大于实际能取到的（删除 / 折叠 / 仅粉丝可见），
+ * 拿声明数减已取数算「还剩几条」会永远剩几条，于是树尾那条入口点了没反应。
+ * 判据只看事实：一次取数要了 `target` 条却只回来更少 ⇒ 平台没有更多了。
+ */
+const exhausted = ref(new Set<string>());
 /** 本次会话新发、还没被抓回来的顶层评论：钉在列表最上面，抓到之后自然撤掉。 */
 const pinned = computed<ThreadRow[]>(() => {
   const known = new Set(pagerState.value.items.map((comment) => comment.id));
@@ -328,6 +341,50 @@ const listRows = computed<ThreadRow[]>(() => {
   return [...pinned.value, ...rows.value.slice(0, rowCap.value).filter((row) => !pinnedIds.has(row.id))];
 });
 const hiddenRows = computed(() => Math.max(0, rows.value.length - rowCap.value));
+
+/**
+ * 渲染条目 = 行 + 每棵树末尾的「还有 N 条回复」。
+ *
+ * 楼中楼按页取（`REPLY_PAGE`），取到窗口上限而平台还有更多时，在这棵树的**最后一行之后**放一个
+ * 分页入口——Reddit 风布局里这是唯一说得通的位置：回复按缩进排在根下面，翻页控件跟着树尾走，
+ * 而不是回到根那一行去找。行序契约不受影响：它不占 comment-row，也不改变任何已渲染行的位置。
+ */
+interface ListEntry {
+  key: string;
+  /** 普通行。 */
+  row?: ThreadRow;
+  /** 树尾分页入口：给哪一棵树再取一页，以及平台还声明剩多少条。 */
+  moreFor?: string;
+  remaining?: number;
+}
+const listEntries = computed<ListEntry[]>(() => {
+  // 钉住的新评论已经在流里时只留钉的那一份（同 id 不渲染两次）
+  const pinnedIds = new Set(pinned.value.map((row) => row.id));
+  const visible = [...pinned.value, ...rows.value.filter((row) => !pinnedIds.has(row.id))];
+  const limit = Math.min(visible.length, pinned.value.length + rowCap.value);
+  const rootsById = new Map(roots.value.map((node) => [node.comment.id, node]));
+  const entries: ListEntry[] = [];
+  let rootId: string | null = null;
+  const flush = (): void => {
+    if (rootId === null) return;
+    const node = rootsById.get(rootId);
+    if (node === undefined || collapsed.value.has(rootId) || exhausted.value.has(rootId)) return;
+    const remaining = node.comment.replyCount - (node.size - 1);
+    if (remaining > 0) entries.push({ key: `more-${rootId}`, moreFor: rootId, remaining });
+  };
+  for (let index = 0; index < limit; index += 1) {
+    const row = visible[index]!;
+    if (row.depth === 0) {
+      // 上一棵树的最后一行确实落在这一批里，才补它的分页入口
+      if (index > 0) flush();
+      rootId = row.id;
+    }
+    entries.push({ key: row.id, row });
+  }
+  // 没被渲染上限截断：最后一个根也可以收尾
+  if (limit === visible.length) flush();
+  return entries;
+});
 /** 定位块自己的小森林：与主流同一份规则（buildForest + flattenThread + 同一折叠集）。 */
 const locatedForest = computed<Forest | null>(() => {
   const block = located.value;
@@ -724,6 +781,8 @@ async function resetTarget(): Promise<void> {
   located.value = null;
   subject.value = null;
   identityLimitations.value = [];
+  exhausted.value = new Set<string>();
+  replyWindow.value = new Map<string, number>();
   snapshotAt.value = null;
   serverEndReason.value = null;
   rowCap.value = ROW_PAGE_SIZE;
@@ -754,6 +813,8 @@ async function switchOrder(next: RootOrder): Promise<void> {
   pager.reset();
   collapsed.value = new Set<string>();
   selectedId.value = null;
+  exhausted.value = new Set<string>();
+  replyWindow.value = new Map<string, number>();
   snapshotAt.value = null;
   serverEndReason.value = null;
   rowCap.value = ROW_PAGE_SIZE;
@@ -844,6 +905,7 @@ function inLoadZone(): boolean {
  * 状态机的 hasNext / loading / error 是取数侧的第二道门：到底之后、取数途中、失败未重试时都不发请求。
  */
 function evaluateTrigger(): void {
+  scheduleAutoExpand();
   if (!inLoadZone() && !sentinelVisible) {
     armed = true;
     return;
@@ -883,13 +945,33 @@ function observeSentinel(): void {
 /** 哨兵随列表一起出现（首屏落定后才渲染），出现即挂上观察。 */
 watch(sentinelEl, observeSentinel, { flush: 'post' });
 
-/** 展开某条评论：它的回复还没取全时按需抓这棵树——首屏绝不主动抓评论树。 */
-async function expandReplies(node: CommentNode): Promise<void> {
+/**
+ * 行集变了就重新评估一次自动补全。
+ *
+ * 光靠视口消息不够：新一页渲染、某棵树展开、折叠切换都会改变「哪些根在可视带里」，
+ * 而这些时刻宿主不会重发视口消息（它只在滚动/尺寸变化时发）。不补这一下，
+ * 一棵刚落进可视带的树要等用户再滚一下才会开始加载。
+ */
+watch(() => listEntries.value.length, () => scheduleAutoExpand());
+
+/**
+ * 取某棵树的一页回复（`more` 为真 = 再往下取一页）。
+ *
+ * 分页不是「一次取到上限再在本地切」：`maxRepliesPerThread` 直接交给抓取层，它按游标逐页取，
+ * 已取过的页命中缓存，所以翻第二页通常只多一次请求。窗口只增不减，行只追加（ADR-0004）。
+ */
+async function expandReplies(node: CommentNode, more = false): Promise<void> {
   const canonical = input.value;
   const id = node.comment.id;
   if (canonical === null || stale.value) return;
-  // 已取全、已经在取、或者这条树已经按需取过（取到单树上限为止）都不再重复请求
-  if (node.children.length >= node.comment.replyCount || expanding.value.has(id) || loaded.value.has(id)) return;
+  if (expanding.value.has(id)) return;
+  const taken = node.size - 1;
+  const window = replyWindow.value.get(id) ?? 0;
+  const target = more ? Math.max(window, taken) + REPLY_PAGE : Math.max(window, REPLY_PAGE);
+  // 平台声明就这么多，没有可取的页
+  if (taken >= node.comment.replyCount) return;
+  // 这一档窗口已经取过：平台可能给的比声明的少（删除 / 折叠），不能因此反复回源
+  if (!more && window >= target) return;
   const resolved = readerWorkbench.resolve(canonical);
   if (resolved === null) return;
   expanding.value = new Set(expanding.value).add(id);
@@ -897,7 +979,7 @@ async function expandReplies(node: CommentNode): Promise<void> {
     const analysis = await readerWorkbench.previewThread(
       resolved.target.subject,
       id,
-      { refresh: 'cache-first', maxRoots: 0, maxRepliesPerThread: EXPANDED_REPLIES },
+      { refresh: 'cache-first', maxRoots: 0, maxRepliesPerThread: target },
       () => {},
       new AbortController().signal,
     );
@@ -911,6 +993,11 @@ async function expandReplies(node: CommentNode): Promise<void> {
       next.set(id, analysis.snapshot.comments);
       loaded.value = next;
     }
+    replyWindow.value = new Map(replyWindow.value).set(id, target);
+    // 要了 target 条却只回来更少：平台的声明数比实际多，别再挂「还有 N 条」让人白点。
+    // （按 rootId 数回复，不假设快照里带着根评论本身）
+    const got = analysis.snapshot.comments.filter((comment) => comment.rootId === id).length;
+    if (got < target) exhausted.value = new Set(exhausted.value).add(id);
     // 回复树落定即量一次：这些行多半还会继续长（图片/表情），ResizeObserver 只作补报
     await reportHeight();
   } catch (caught) {
@@ -919,6 +1006,7 @@ async function expandReplies(node: CommentNode): Promise<void> {
     const next = new Set(expanding.value);
     next.delete(id);
     expanding.value = next;
+    scheduleAutoExpand();
   }
 }
 
@@ -927,12 +1015,70 @@ function nodeOf(id: string): CommentNode | null {
   return forest.value?.byId.get(id) ?? locatedForest.value?.byId.get(id) ?? null;
 }
 
+/** 自动补全每轮最多起几棵评论树：剩下的等下一轮（每次视口/高度变化都会再排一次）。 */
+const AUTO_EXPAND_PER_PASS = 3;
+/** 可视带上下各留这么宽：刚滚出屏幕一点点的根也顺手补上，回头滚回来不用等。 */
+const AUTO_EXPAND_BAND = 600;
+let autoExpandTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** 合并同一帧里的多次触发（视口消息、高度上报都可能连着来）。 */
+function scheduleAutoExpand(): void {
+  if (autoExpandTimer !== undefined) return;
+  autoExpandTimer = setTimeout(() => {
+    autoExpandTimer = undefined;
+    autoExpandVisible();
+  }, 200);
+}
+
+/**
+ * 自动把**正在看的**楼中楼补全。
+ *
+ * 阅读器只按需抓评论树（首屏那十几条 `detail` 就是这么省掉的），但用户不该为了看回复先点两下：
+ * 可视带里的根评论一出现就自动抓它那棵树，抓回来原地铺开，行序契约不变（只追加、已读行不漂移）。
+ * 三条边界：折叠过的不碰（用户主动收起 / 「全部折叠」是明确意图）；已取全 / 在途 / 抓过的不重复请求；
+ * 每轮最多起 3 棵——回复插在根下面会把后面的根推出可视带，所以不会顺着列表一路抓到底。
+ */
+function autoExpandVisible(): void {
+  const root = rootEl.value;
+  if (root === null || stale.value || visibleBottom === -Infinity) return;
+  const screen = viewportHeight.value > 0 ? viewportHeight.value : prefetchMargin.value;
+  const top = visibleBottom - screen - AUTO_EXPAND_BAND;
+  const bottom = visibleBottom + AUTO_EXPAND_BAND;
+  let started = 0;
+  for (const element of root.querySelectorAll<HTMLElement>('article.comment-row.root')) {
+    if (started >= AUTO_EXPAND_PER_PASS) break;
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom < top || rect.top > bottom) continue;
+    const id = element.dataset.commentId;
+    if (id === undefined || collapsed.value.has(id)) continue;
+    const node = nodeOf(id);
+    if (node === null) continue;
+    const target = Math.max(replyWindow.value.get(id) ?? 0, REPLY_PAGE);
+    if (exhausted.value.has(id) || node.size - 1 >= node.comment.replyCount || node.size - 1 >= target || expanding.value.has(id)) continue;
+    started += 1;
+    void expandReplies(node);
+  }
+}
+
+/** 树尾「还有 N 条回复」：展开（若被折叠）+ 再取一页。 */
+function loadMoreReplies(id: string): void {
+  const node = nodeOf(id);
+  if (node === null) return;
+  collapsed.value = withId(collapsed.value, id, false);
+  void expandReplies(node, true);
+}
+
 function toggleFold(id: string): void {
+  const node = nodeOf(id);
   const next = new Set(collapsed.value);
   if (next.has(id)) {
     next.delete(id);
-    const node = nodeOf(id);
     if (node !== null) void expandReplies(node);
+  } else if (node !== null && !loaded.value.has(id) && node.size - 1 < node.comment.replyCount) {
+    // 还一条回复都没取：这一下点击的意思是「去把回复拉下来」，不是先把看得见的预览收起来。
+    // （旧行为要「点一下折叠、再点一下展开」才会回源，用户看到的是一次点击毫无反应。）
+    void expandReplies(node);
+    return;
   } else {
     next.add(id);
   }
@@ -1500,6 +1646,7 @@ onBeforeUnmount(() => {
         :reply="row.id === replyTo ? replyStateOf(row.id) : null"
         :selected="row.id === selectedId"
         :busy="expanding.has(row.id)"
+        :expandable="row.node.size - 1 < row.node.comment.replyCount && !loaded.has(row.id) && !exhausted.has(row.id)"
         @select="selectedId = $event"
         @fold="toggleFold"
         @analyze="selectedId = $event; openGraph()"
@@ -1529,16 +1676,30 @@ onBeforeUnmount(() => {
         <span class="grow" />
         <span v-if="hiddenRows > 0" class="subtle small tnum">已显示 {{ formatCount(listRows.length) }} 行</span>
       </div>
+      <template v-for="entry in listEntries" :key="entry.key">
+      <button
+        v-if="entry.moreFor"
+        type="button"
+        class="more-replies"
+        :disabled="expanding.has(entry.moreFor)"
+        :aria-label="`再加载 ${formatCount(entry.remaining ?? 0)} 条回复`"
+        @click="loadMoreReplies(entry.moreFor)"
+      >
+        <IconCircleNotch v-if="expanding.has(entry.moreFor)" class="spinner" aria-hidden="true" />
+        <IconCaretDown v-else aria-hidden="true" />
+        <span>还有 {{ formatCount(entry.remaining ?? 0) }} 条回复</span>
+      </button>
       <PageCommentRow
-        v-for="row in listRows"
-        :key="row.id"
-        :row="row"
-        :like="likeStateOf(row)"
+        v-else-if="entry.row"
+        :key="entry.row.id"
+        :row="entry.row"
+        :like="likeStateOf(entry.row)"
         :subject-url="subject?.url"
         :session-user-id="sessionUserId"
-        :reply="row.id === replyTo ? replyStateOf(row.id) : null"
-        :selected="row.id === selectedId"
-        :busy="expanding.has(row.id)"
+        :reply="entry.row.id === replyTo ? replyStateOf(entry.row.id) : null"
+        :selected="entry.row.id === selectedId"
+        :busy="expanding.has(entry.row.id)"
+        :expandable="entry.row.node.size - 1 < entry.row.node.comment.replyCount && !loaded.has(entry.row.id) && !exhausted.has(entry.row.id)"
         @select="selectedId = $event"
         @fold="toggleFold"
         @analyze="selectedId = $event; openGraph()"
@@ -1554,6 +1715,7 @@ onBeforeUnmount(() => {
         @reply-input="setDraft"
         @submit-reply="submitReply"
       />
+      </template>
       <p v-if="listRows.length === 0" class="empty">这个视频还没有可读的评论。</p>
       <!-- 哨兵：零高度标记，只作兜底触发。跨源 iframe 里 rootMargin 会被忽略，提前量只能做进哨兵自身几何：
            用 transform 把它上移 LOAD_MORE_MARGIN（不占布局、不加内容高度，因此不影响上报的槽位高度），
@@ -1684,6 +1846,39 @@ onBeforeUnmount(() => {
 }
 
 /* 列表题头:「评论 312」——B 站评论区的第一行。 */
+/* 树尾的分页入口：贴着缩进列的一枚小胶囊（图标 + 数字），不占整行、也不像一条评论。
+   `.comment-list` 是 flex 列（默认 stretch），这里必须 align-self 收回内容宽度。 */
+.more-replies {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 var(--sp-2) calc(var(--sp-4) + 32px);
+  padding: 1px var(--sp-2) 1px var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.more-replies svg {
+  width: 12px;
+  height: 12px;
+}
+
+.more-replies:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+.more-replies:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .list-head {
   align-items: baseline;
   gap: var(--sp-2);

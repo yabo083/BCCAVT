@@ -40,6 +40,8 @@ import type { UserCardRect } from '@/extension/page-comments';
 
 const props = defineProps<{
   row: ThreadRow;
+  /** 这棵树还有没取回的回复（声明数 > 已取到）：按钮文案说明点它是「去拉回来」而不是折叠。 */
+  expandable?: boolean;
   /** 点赞显示态：计数已含本次会话的乐观增量。 */
   like: RowLikeState;
   /** 回复框状态：null / 缺省 = 关闭。 */
@@ -347,12 +349,18 @@ function toggleReply(): void {
             type="button"
             class="act fold-act"
             :aria-expanded="!props.row.folded"
-            :title="props.row.folded ? '展开这条评论的回复' : '收起这条评论的回复'"
+            :title="props.row.folded || props.expandable ? '展开这条评论的回复' : '收起这条评论的回复'"
             @click.stop="emit('fold', props.row.id)"
           >
             <IconCaretRight v-if="props.row.folded" />
             <IconCaretDown v-else />
-            {{ props.row.folded ? `展开 ${formatCount(props.row.hidden)} 条回复` : '收起回复' }}
+            {{
+              props.row.folded
+                ? `展开 ${formatCount(props.row.hidden)} 条回复`
+                : props.expandable
+                  ? `展开 ${formatCount(comment.replyCount)} 条回复`
+                  : '收起回复'
+            }}
           </button>
           <span v-else-if="props.row.node.size > 1" class="stat tnum" title="这条评论下的回复数">
             {{ formatCount(props.row.node.size - 1) }} 条回复

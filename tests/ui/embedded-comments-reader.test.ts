@@ -380,6 +380,99 @@ describe('嵌入阅读器的取数触发', () => {
     expect(requests).toEqual([null, 'p1']);
   });
 
+  it('可视带里的根评论自动补全楼中楼：不用点两下，回复自己铺开', async () => {
+    const a = makeComment({ id: 'a', text: '有回复的甲', replyCount: 4 });
+    const b = makeComment({ id: 'b', text: '有回复的乙', replyCount: 4 });
+    const preview = (id: string) => makeComment({ id: `${id}-p`, rootId: id, parentId: id, text: `${id} 预览` });
+    planPages([{ cursor: null, comments: [a, preview('a'), b, preview('b')], next: null }]);
+    mocks.previewThread.mockImplementation(async (_ref: unknown, id: string) => ({
+      snapshot: { comments: [makeComment({ id: `${id}-r1`, rootId: id, parentId: id, text: `${id} 回复一` })] },
+    }));
+    const wrapper = await open();
+
+    deliverViewport(300, 800);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await settle();
+
+    expect(mocks.previewThread).toHaveBeenCalledTimes(2);
+    expect(rowIds(wrapper).length).toBeGreaterThan(4);
+
+    // 再推一次视口：已经取过的树不再重复请求（没有请求风暴）
+    deliverViewport(300, 800);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await settle();
+    expect(mocks.previewThread).toHaveBeenCalledTimes(2);
+  });
+
+  it('楼中楼按页取：先 20 条，树尾「还有 N 条回复」点了再取一页', async () => {
+    const root = makeComment({ id: 'big', replyCount: 50 });
+    planPages([{ cursor: null, comments: [root], next: null }]);
+    const asked: number[] = [];
+    mocks.previewThread.mockImplementation(async (_ref: unknown, id: string, options: { maxRepliesPerThread: number }) => {
+      asked.push(options.maxRepliesPerThread);
+      const count = Math.min(options.maxRepliesPerThread, 50);
+      return {
+        snapshot: {
+          comments: Array.from({ length: count }, (_, n) =>
+            makeComment({ id: `${id}-r${n}`, rootId: id, parentId: id, text: `回复 ${n}` }),
+          ),
+        },
+      };
+    });
+    const wrapper = await open();
+
+    // 这条根没有内联预览，行上没有折叠按钮：树尾那条分页入口就是唯一的加载口
+    await wrapper.get('button.more-replies').trigger('click');
+    await settle(10);
+
+    expect(asked).toEqual([20]);
+    expect(wrapper.findAll('article.comment-row')).toHaveLength(21);
+    expect(wrapper.text()).toContain('还有 30 条回复');
+
+    await wrapper.get('button.more-replies').trigger('click');
+    await settle(10);
+
+    expect(asked).toEqual([20, 40]);
+    expect(wrapper.text()).toContain('还有 10 条回复');
+  });
+
+  it('平台声明的回复数多于实际能取到的：不再挂「还有 N 条回复」让人白点', async () => {
+    // 声明 8 条，实际只有 3 条（删除 / 折叠）：要了 20 条只回来 3 条 ⇒ 这棵树取到头了
+    const root = makeComment({ id: 'over', replyCount: 8 });
+    planPages([{ cursor: null, comments: [root], next: null }]);
+    mocks.previewThread.mockImplementation(async (_ref: unknown, id: string) => ({
+      snapshot: {
+        comments: Array.from({ length: 3 }, (_, n) =>
+          makeComment({ id: `${id}-r${n}`, rootId: id, parentId: id, text: `回复 ${n}` }),
+        ),
+      },
+    }));
+    const wrapper = await open();
+
+    deliverViewport(300, 800);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await settle(10);
+
+    expect(mocks.previewThread).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('.more-replies').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('还有');
+  });
+
+  it('「全部折叠」之后不再自动补全：用户的收起意图优先于自动展开', async () => {
+    const a = makeComment({ id: 'a', text: '有回复的甲', replyCount: 4 });
+    planPages([{ cursor: null, comments: [a, makeComment({ id: 'a-p', rootId: 'a', parentId: 'a', text: '预览' })], next: null }]);
+    mocks.previewThread.mockResolvedValue({ snapshot: { comments: [] } });
+    const wrapper = await open();
+
+    await wrapper.get('button[title="全部折叠"]').trigger('click');
+    await settle();
+    deliverViewport(300, 800);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await settle();
+
+    expect(mocks.previewThread).not.toHaveBeenCalled();
+  });
+
   it('抓取层提前收尾时如实报「不完整」并说明原因，不假装到底', async () => {
     planPages([
       {
@@ -609,16 +702,24 @@ describe('渐进渲染的收尾（到底之后不再分批）', () => {
     const wrapper = await open();
     expect(wrapper.findAll('article.comment-row')).toHaveLength(1 + previews.length);
 
-    // 折叠再展开：上限若被「总数临时变小」收回去，展开后已铺开的窗口就白铺了
+    // 第一下点击就是「去把回复都拉下来」（旧行为要先折叠再展开才回源）
+    await wrapper.get('button[title="展开这条评论的回复"]').trigger('click');
+    await settle(10);
+    expect(mocks.previewThread).toHaveBeenCalledTimes(1);
+
+    const shownWhileLoaded = wrapper.findAll('article.comment-row').length;
+    expect(shownWhileLoaded).toBeGreaterThan(1);
+
+    // 取全之后按钮才是折叠语义；折叠再展开，已铺开的窗口不该被收回去
     await wrapper.get('button[title="收起这条评论的回复"]').trigger('click');
     await settle();
     expect(wrapper.findAll('article.comment-row')).toHaveLength(1);
 
     await wrapper.get('button[title="展开这条评论的回复"]').trigger('click');
     await settle(10);
-    expect(mocks.previewThread).toHaveBeenCalledTimes(1);
-    // 折叠期间「总数」一度只有 1 行，上限若跟着收回去，这里就会只剩几行（已铺开的窗口白铺）
-    expect(wrapper.findAll('article.comment-row')).toHaveLength(ROW_PAGE_SIZE);
+    // 折叠期间「总数」一度只有 1 行，上限若跟着收回去，这里就会比折叠前少（已铺开的窗口白铺）：
+    // 展开回来的行数只能 ≥ 折叠前，允许按批再往上长。
+    expect(wrapper.findAll('article.comment-row').length).toBeGreaterThanOrEqual(shownWhileLoaded);
 
     // 到底态下滚到已渲染底部：剩下的行按批自动铺开（旧行为：hasNext 为假 ⇒ 停在「继续显示 N 条」）
     for (let round = 0; round < 3; round += 1) {
@@ -656,8 +757,6 @@ describe('加载指示与完整度说明', () => {
     mocks.previewThread.mockImplementation(() => threadGate.promise);
     const wrapper = await open();
 
-    await wrapper.get('button[title="收起这条评论的回复"]').trigger('click');
-    await settle();
     await wrapper.get('button[title="展开这条评论的回复"]').trigger('click');
     await settle();
 

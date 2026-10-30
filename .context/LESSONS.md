@@ -178,3 +178,11 @@
 - **预取只动触发位置**：宿主把 `viewportHeight` 一起送进 `READER_VIEWPORT`，阅读器用「距底一屏」做阈值（`prefetchMargin = max(480, viewportHeight)`）。边沿触发、单飞、每页一次都不变，请求数不变；提前量只买一次 RTT 的观感。**别把提前量继续放大**：那是拿请求换手感，用户往往就在那儿停下。
 
 **相关位置**：`src/core/cache/types.ts#FRESHNESS_TTL_MS`、`src/core/crawl.ts#loadRootsPage` / `#loadHotRootsPage`、`src/ui/EmbeddedComments.vue#prefetchMargin` / `#completeness`、`src/extension/content/page-reader.ts#postViewport`、`tests/core/roots-page.test.ts`、`tests/ui/embedded-comments-reader.test.ts`。
+
+## L-19 「声明数 - 已取数 = 还剩几条」是个会骗人的减法（2026-10-30）
+
+- **现象**：楼中楼树尾挂着「还有 3 条回复」，点了没反应；再点也一样。
+- **根因**：剩余数是按平台声明的 `replyCount` 减已取数算的。平台的声明常大于实际可取数（被删除、被折叠、仅粉丝可见），于是差值恒为正；而抓取层已经把这棵树翻到底了，再点自然什么都不发生。
+- **判据要换**：不问「声明数还剩多少」，只问**这次要了 N 条、回来多少**——要 20 条只回来 3 条，就说明平台没有更多了，把这棵树记为到底（`exhausted`），入口立刻消失。声明数只用来做「是否已经足够」的展示，不再用来决定「还能点几次」。
+- **配套的两处语义修正**：① 分页窗口（20/页）与「到底」是两件事，别用声明数当窗口终点；② 折叠按钮在「一条回复都还没取」时的语义应该是**去取**，而不是先把看得见的预览收起来（旧行为要点两下才回源，用户看到的是「第一下没反应」）。
+- **相关位置**：`src/ui/EmbeddedComments.vue#expandReplies` / `#exhausted` / `#listEntries`、`tests/ui/embedded-comments-reader.test.ts`。
