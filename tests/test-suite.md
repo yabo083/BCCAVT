@@ -31,6 +31,8 @@
 | RDR-11 | 评论区默认排序设置 | 弹窗可见 | 弹窗「评论区排序」分段控件（最热|最新）写 `loupe.reader.defaultOrder`；默认开（hot）；只对下一次打开的阅读器生效 | `ConfigPopup.vue`、`page-comments.ts#READER_DEFAULT_ORDER_KEY` |
 | RDR-09 | 排序切换「最热 \| 最新」换数据集 | 阅读器已加载 ≥2 页 | ① 点「最新」→ `mode=2` 请求，行整批替换、第一行是最新评论；② 点回「最热」→ **0** 新请求（热度序按「会话 + 块号」成链，整链命中缓存）；③ 再点「最新」→ 0 请求；④ 在「最新」滚 2 页 → 只有 `mode=2` 请求且行只追加 | [ADR-0004](../docs/adr/0004-reader-row-order-append-only.md) 补充、`EmbeddedComments.vue#switchOrder`、`crawl.ts#loadHotRootsPage` |
 | RDR-12 | 最热读到底的完整度与数字口径 | 已登录、阅读器默认「最热」 | 一路滚到「没有更多评论了」 | ① 徽章是**完整**，不是「不完整」；② 顶栏与列表头都显示平台声明总数（如 191），不显示「条目数 108」；③ 气泡说明「平台声明 N 条（含楼中楼的全部回复）；顶层 M 条根评论已全部取回，楼中楼按需展开」 | `EmbeddedComments.vue#completeness`、`EmbeddedComments.vue#commentCount` |
+| RDR-14 | 距底一屏预取 | 已登录、阅读器加载 ≥2 页、列表还有下一页 | 慢慢往下滚，在离底部还有约一屏时停下观察网络 | 下一页请求在**进入到底区之前**就发出（`READER_VIEWPORT` 带 `viewportHeight`）；视口高度未知时退回 480px 提前量；仍然每页只取一次、同段到底区不重复触发 | `EmbeddedComments.vue#prefetchMargin`、`page-reader.ts#postViewport` |
+| RDR-15 | 分层 TTL：旧区间不该跟首屏同寿命 | 同一视频滚完「最新」多页 | 在 DevTools → Application → IndexedDB `loupe` → `entries` 里看 `expiresAt` | 首屏键（`…|roots|time|start`、`…|thread|<id>|start`）约 30 分钟；更深页（`…|roots|time|<cursor>`、`…|thread|<id>|<cursor>`）与热度序块/走完的链记录约 12 小时 | `src/core/cache/types.ts#FRESHNESS_TTL_MS`、`crawl.ts#loadRootsPage` |
 | RDR-13 | 平台 412 限流：冷却可视化 + 自动重试 | 人为让 `wbi/main` 返回 412（或连续快速滚动触发） | 停在列表底部等 | ① 页脚/顶部显示「平台限流 · N 秒后自动重试（不是登录失效…）」而不是干巴巴的「加载失败」；② 到点自动重试并继续加载，无需手动点；③ 连续 4 次仍被限流则只留「重试」按钮，不再自动打 | `EmbeddedComments.vue#noteRateLimited`、[ADR-0010](../docs/adr/0010-shared-rate-limit.md) 2026-10-30 修订 |
 | RDR-08 | 定位的反例：同一视频开着多枚标签页 | 同一视频 URL 开着 ≥2 枚标签页 | 从工作台点「在评论区定位」 | 消息投给后台挑中的那一枚（按视频身份，不认「当前可见」），另一枚不动——这是已知语义，不是 bug | `.context/LESSONS.md` L-13、ADR-0008 |
 

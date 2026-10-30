@@ -290,6 +290,14 @@ export class CrawlRunner {
 /** 热度序游标的前缀：`hot:<会话 id>:<块号>`（平台 offset 原样放在会话 id 里）。 */
 const HOT_CURSOR_PREFIX = 'hot:';
 
+/** 一页顶层评论 + 「这页是否来自旧快照」的时间戳（热度序整链回放时给出）。 */
+export interface RootsPageResult extends Page<Comment> {
+  /** 这一页来自缓存里的整条热度序快照时，快照的写入时刻；实时取到的页没有这个字段。 */
+  snapshotAt?: number;
+  /** 这一页是个「提前收尾」时说明为什么（例如平台会话失效、快进也找不到新内容）。 */
+  endReason?: string;
+}
+
 /**
  * 一条热度序会话（平台侧按登录用户 + 主体保存的翻页进度）。
  *
@@ -297,6 +305,10 @@ const HOT_CURSOR_PREFIX = 'hot:';
  * 逐块推进（实测同一 offset 依次回 18 / 20 / 6 / 0 条后 is_end；隔 60s 重发仍从会话当前进度继续，
  * 不回放上一块），所以「第几块」只能由我们的块号表达。块按 (会话 id, 块号) 入缓存，
  * 切序、重开阅读器都能整链命中（0 回源）；offset "" 才是开一条新会话（回到榜首）。
+ *
+ * 分层 TTL：块一律 `history`（12 小时）——同一个会话链一旦抓过，块内容不会再变，不该跟首屏同寿命；
+ * **链记录**在链没走完时仍是 `page`（30 分钟），因为它只是「服务端会话还活着」的担保：过了就重开一条，
+ * 不做长时间跨度的会话续接。走完的链记录给 `history`，于是完整的热度榜快照能整天回放（0 回源）。
  */
 interface HotChain {
   chainId: string;
@@ -305,8 +317,11 @@ interface HotChain {
   /** 已缓存的块数（块号 0..chunks-1 连续）。 */
   chunks: number;
   ended: boolean;
-  /** 首块的条目 id：会话被平台重置时会重回首块，用它认出来（不能把它当成「第 N 块」）。 */
-  firstIds: string[];
+  /**
+   * 这条链已经收下的所有条目 id。续块时只要新页与它有交集，就说明平台没在往前推、
+   * 而是把会话重置回了某个旧位置（榜首或中间某块）——一律当新会话重来，绝不让旧块冒充第 N 块。
+   */
+  seenIds: string[];
 }
 
 function hotChainKey(subject: string, account: string): string {
@@ -347,21 +362,38 @@ interface RootsPageSource {
 
 /**
  * 取一页顶层评论，按排序走两条语义不同的链：
- * - **time（最新）**：游标是纯位置，页键 = 游标，命中即用缓存。
+ * - **time（最新）**：游标是纯位置，页键 = 游标，命中即用缓存；**首屏 `page`（30min）、更深页 `history`（12h）**
+ *   ——深页的内容（第 21 条往后）不会再被新评论挤动，只有删除/折叠会让它变旧，不值得每半小时重跑一遍。
  * - **hot（最热）**：见 `HotChain`；块按 (会话 id, 块号) 缓存，回放不产生请求。
  */
-async function loadRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<Page<Comment>> {
-  if (source.order === 'time') return runner.load(source.key, 'page', source.fetch(source.cursor), options);
+async function loadRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<RootsPageResult> {
+  if (source.order === 'time') {
+    const freshness: Freshness = source.cursor === null ? 'page' : 'history';
+    return runner.load(source.key, freshness, source.fetch(source.cursor), options);
+  }
   return loadHotRootsPage(runner, source, options);
 }
 
-async function loadHotRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<Page<Comment>> {
-  const fromStart = source.cursor === null;
-  const stored =
-    fromStart && options.force === true
-      ? undefined
-      : (await runner.cache.get<HotChain>(hotChainKey(source.subject, source.account)))?.value;
+/**
+ * 热度序一次取数的全部状态都在这条链上，而链挂在 (主体, 身份) 下——两个标签页同时看同一个视频时，
+ * 各自「读链记录 → 回源 → 写记录」会互相覆盖指针、把某一块弄丢。所以整段落在同一把 Web Lock 里：
+ * 另一个文档等它做完，再从缓存里读那一块（跨文档锁空间实测共享，见 ADR-0010）。
+ */
+async function loadHotRootsPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<RootsPageResult> {
+  const locks = typeof navigator === 'undefined' ? null : (navigator.locks ?? null);
+  if (locks === null) return resolveHotPage(runner, source, options);
+  return (await locks.request(`loupe-hot|${source.subject}|${source.account}`, () => resolveHotPage(runner, source, options))) as RootsPageResult;
+}
+
+/** 平台会话失效后，最多快进这么多块去找「没见过的新条目」；再多就不值得了（那是整条重走）。 */
+const HOT_RESET_MAX_SKIP = 3;
+
+async function resolveHotPage(runner: CrawlRunner, source: RootsPageSource, options: LoadOptions): Promise<RootsPageResult> {
+  const recordKey = hotChainKey(source.subject, source.account);
+  const storedEntry = await runner.cache.get<HotChain>(recordKey);
   const parsed = parseHotCursor(source.cursor);
+  // force 只在「从起点重来」时生效：刷新已加载的页会从起点重放，后续页仍按链的块号继续。
+  const stored = source.cursor === null && options.force === true ? undefined : storedEntry?.value;
 
   let chain: HotChain | undefined;
   let index = 0;
@@ -380,7 +412,10 @@ async function loadHotRootsPage(runner: CrawlRunner, source: RootsPageSource, op
     const cached = await runner.cache.get<Page<Comment>>(hotChunkKey(source.subject, source.account, chain.chainId, index));
     if (cached !== undefined) {
       const more = index + 1 < chain.chunks || !chain.ended;
-      return { items: cached.value.items, next: more ? hotCursorOf(chain.chainId, index + 1) : null };
+      const page: RootsPageResult = { items: cached.value.items, next: more ? hotCursorOf(chain.chainId, index + 1) : null };
+      // 只有「整条链已经走完、整段来自缓存」才算快照；还有下一块的属于现场续读，不提示陈旧。
+      if (chain.ended) page.snapshotAt = storedEntry?.storedAt;
+      return page;
     }
     // 块被淘汰（配额 / TTL 抖动）：这条链已经断了，别再往它上面接新块。
     if (index < chain.chunks) chain = undefined;
@@ -391,34 +426,83 @@ async function loadHotRootsPage(runner: CrawlRunner, source: RootsPageSource, op
   // 平台已经说完：这一链没有更多块了，界外请求一律按末页回答（不回到源站）。
   if (chain.ended) return { items: [], next: null };
 
-  const page = await runner.request(source.fetch(chain.next));
-  const firstIds = new Set(chain.firstIds);
-  if (page.items.length > 0 && firstIds.size > 0 && page.items.every((item) => firstIds.has(item.id))) {
-    // 整页都是首块里的条目 = 平台把会话重置回了榜首（隔太久或被别的消费者走完），当新会话重来。
-    return startHotChain(runner, source);
+  const page = await stepHotChain(runner, source, chain, index);
+  const seen = new Set(chain.seenIds);
+  if (page.items.some((item) => seen.has(item.id))) {
+    // 与已收下的条目有交集 = 平台没在往前推，而是把会话重置到了某个旧位置。
+    // 实测：隔 20 分钟用旧 offset 续，返回的是**中间某块**的原内容（不是榜首）——所以判据必须是
+    // 「任一 id 重合」而不是「整页等于首块」。此时开一条新会话，并快进跳过与已收内容重合的块，
+    // 把第一块带新条目的页交给视图（只追加契约不变，已读行不漂移）。
+    return startHotChain(runner, source, seen);
   }
+  const more = page.next !== null && page.items.length > 0;
+  return { items: page.items, next: more ? hotCursorOf(chain.chainId, index + 1) : null };
+}
+
+/** 取「这条链的下一块」并入缓存：写块、推进链记录，返回平台那一页。 */
+async function stepHotChain(
+  runner: CrawlRunner,
+  source: RootsPageSource,
+  chain: HotChain,
+  index: number,
+): Promise<Page<Comment>> {
+  const page = await runner.request(source.fetch(chain.next));
   const chunks = index + 1;
   // 平台用「一页零条 + is_end」收官；零条也按到底处理，避免在空块上无限续链。
   const ended = page.next === null || page.items.length === 0;
-  await runner.cache.set(hotChunkKey(source.subject, source.account, chain.chainId, index), page, 'page');
+  await runner.cache.set(hotChunkKey(source.subject, source.account, chain.chainId, index), page, 'history');
   await runner.cache.set(
     hotChainKey(source.subject, source.account),
-    { chainId: chain.chainId, next: page.next, chunks, ended, firstIds: chain.firstIds } satisfies HotChain,
-    'page',
+    {
+      chainId: chain.chainId,
+      next: page.next,
+      chunks,
+      ended,
+      seenIds: [...chain.seenIds, ...page.items.map((item) => item.id)],
+    } satisfies HotChain,
+    // 走完的链是「完整快照」，留 12 小时；没走完的只是会话担保，30 分钟后就不再续接。
+    ended ? 'history' : 'page',
   );
-  return { items: page.items, next: ended ? null : hotCursorOf(chain.chainId, chunks) };
+  return page;
 }
 
-/** 开一条新的热度序会话：块 0 回源，链记录与块一起落缓存。 */
-async function startHotChain(runner: CrawlRunner, source: RootsPageSource): Promise<Page<Comment>> {
-  const page = await runner.request(source.fetch(null));
+/**
+ * 开一条新的热度序会话：块 0 回源，链记录与块一起落缓存。
+ * `skip` 非空时是「会话失效后的重来」：整页都是已收过的条目就继续下一块（至多 `HOT_RESET_MAX_SKIP` 块），
+ * 把第一块带新条目的页交出去；快进耗完仍全是旧内容，就如实收尾（`endReason`），不做整条重走。
+ */
+async function startHotChain(runner: CrawlRunner, source: RootsPageSource, skip?: Set<string>): Promise<RootsPageResult> {
+  const recordKey = hotChainKey(source.subject, source.account);
+  const first = await runner.request(source.fetch(null));
   // 会话 id 取平台给的下一块 offset（里面带 session_id）；只有一块就没有会话可记，用一次性 id 占位。
-  const chainId = page.next ?? `single-${runner.deps.now()}`;
-  const ended = page.next === null || page.items.length === 0;
-  const chain: HotChain = { chainId, next: page.next, chunks: 1, ended, firstIds: page.items.map((item) => item.id) };
-  await runner.cache.set(hotChunkKey(source.subject, source.account, chainId, 0), page, 'page');
-  await runner.cache.set(hotChainKey(source.subject, source.account), chain, 'page');
-  return { items: page.items, next: ended ? null : hotCursorOf(chainId, 1) };
+  let chain: HotChain = {
+    chainId: first.next ?? `single-${runner.deps.now()}`,
+    next: first.next,
+    chunks: 1,
+    ended: first.next === null || first.items.length === 0,
+    seenIds: first.items.map((item) => item.id),
+  };
+  await runner.cache.set(hotChunkKey(source.subject, source.account, chain.chainId, 0), first, 'history');
+  await runner.cache.set(recordKey, chain, chain.ended ? 'history' : 'page');
+
+  let page = first;
+  let index = 1; // 块 0 已经收下
+  if (skip !== undefined && skip.size > 0) {
+    for (;;) {
+      const redundant = page.items.length > 0 && page.items.every((item) => skip.has(item.id));
+      if (!redundant || chain.ended || index > HOT_RESET_MAX_SKIP) break;
+      page = await stepHotChain(runner, source, chain, index);
+      chain = (await runner.cache.get<HotChain>(recordKey))!.value;
+      index += 1;
+    }
+    if (page.items.length > 0 && page.items.every((item) => skip.has(item.id))) {
+      // 快进额度用完，平台给的仍是已读内容：这条链到这里为止，别拿重复行冒充「到底」。
+      return { items: [], next: null, endReason: '平台的热度序会话已失效，剩下的评论请点刷新重新拉取' };
+    }
+  }
+
+  const more = page.next !== null && page.items.length > 0;
+  return { items: page.items, next: more ? hotCursorOf(chain.chainId, chain.chunks) : null };
 }
 
 export interface SubjectCrawl {
@@ -712,6 +796,9 @@ export async function crawlRootsPage(
     // 身份限制随页带回：未登录时平台会把顶层评论截断成几条并直接说「到底」，
     // 调用方（阅读器）只有拿到这句话，才能把「不完整 4 / 1330」解释成「为什么只有 4 条」。
     limitations: [...session.limitations],
+    // 整条热度序快照回放时给出快照时刻（实时取到的页没有这个字段）
+    ...(page.snapshotAt === undefined ? {} : { snapshotAt: page.snapshotAt }),
+    ...(page.endReason === undefined ? {} : { endReason: page.endReason }),
   };
 }
 
@@ -738,9 +825,11 @@ export async function crawlThreadPages(
   let truncated = false;
   for (;;) {
     throwIfAborted(runner.signal);
+    // 分页首屏 30 分钟（新回复会插到顶部）；更深的回复页是已固化的历史区间，给 12 小时（同上一条顶层分页）。
+    const freshness: Freshness = cursor === null ? 'page' : 'history';
     const page: ThreadPage = await runner.load<ThreadPage>(
       cacheKey('page', subjectKey(subject.ref), account, 'thread', commentId, cursor ?? 'start'),
-      'page',
+      freshness,
       (ctx) => runner.adapter.listThread(subject, commentId, cursor, ctx),
       usePageCache ? {} : freshAfter !== undefined ? { freshAfter } : { force: true },
     );

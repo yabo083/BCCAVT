@@ -103,7 +103,11 @@ import type {
 const PAGE_REPLIES = 3;
 /** 展开一条评论时最多取这么多回复；再多请用放大镜在独立窗口里看完整树。 */
 const EXPANDED_REPLIES = 200;
-/** 宿主视口底边距已渲染内容底部小于它，就去取下一页顶层评论 / 追加一批渲染行。 */
+/**
+ * 提前量的下限（宿主视口高度未知时用它）：宿主视口底边距已渲染内容底部小于它，就去取下一页。
+ * 实际上限是**一屏**（`prefetchMargin`）——距底还有一屏就预取，把一次 RTT 藏进用户还在滚的那段时间里；
+ * 不预取到更远是因为那会凭空多打请求（用户可能就在这里停下）。
+ */
 const LOAD_MORE_MARGIN = 480;
 /** 内容再少也留出这么高，避免刚进页面时 iframe 抖成一条。 */
 const MIN_CONTENT_HEIGHT = 360;
@@ -239,6 +243,9 @@ let contentHeight = 0;
 let committedHeight = 0;
 /** 最近一次宿主视口底边（嵌入文档坐标系）：-Infinity = 还没收到过视口消息。 */
 let visibleBottom = -Infinity;
+/** 宿主视口高度（随视口消息带回）：预取提前量取「一屏」，未知时退化成 `LOAD_MORE_MARGIN`。 */
+const viewportHeight = ref(0);
+const prefetchMargin = computed(() => Math.max(LOAD_MORE_MARGIN, viewportHeight.value));
 /** 哨兵是否在视口里：IntersectionObserver 的兜底信号（跨源 iframe 里它可能不投递）。 */
 let sentinelVisible = false;
 /**
@@ -348,6 +355,15 @@ const commentCount = computed(() => pagerState.value.items.filter((comment) => c
  */
 const identityLimitations = ref<readonly string[]>([]);
 /**
+ * 整条热度序快照的回放时刻（毫秒）：只有「最热」的链已经走完、整段来自缓存时才有值。
+ * 实时读取（含续块）一律为 null——宁可不说，也不要拿旧快照冒充刚取回。
+ */
+const snapshotAt = ref<number | null>(null);
+/** 超过这么久才在气泡里提「这是快照」：几秒钟的缓存不值得打扰。 */
+const SNAPSHOT_NOTE_AFTER_MS = 5 * 60_000;
+/** 抓取层带回来的「提前收尾」原因（如平台热度序会话失效）：完整度要如实说出来，不能假装到底。 */
+const serverEndReason = ref<string | null>(null);
+/**
  * 完整度只回答一个问题：**顶层评论读完了没有**。
  *
  * 判据是平台自己给的两个信号——还有下一页游标？最后一页是否平台说「到底」？到顶即完整。
@@ -364,12 +380,17 @@ const completeness = computed<Completeness>(() => {
   }
   const blocking: string[] = [];
   if (pagerState.value.endReason !== null) blocking.push(pagerState.value.endReason);
+  if (serverEndReason.value !== null) blocking.push(serverEndReason.value);
   const short = declaredTotal !== undefined && roots < declaredTotal;
   // 身份限制（未登录时平台会把顶层评论截断成几条并直接说「到底」）才是真的没读到。
   if (short) {
     for (const limitation of identityLimitations.value) if (!blocking.includes(limitation)) blocking.push(limitation);
   }
   const notes: string[] = [];
+  const snapshotAge = snapshotAt.value === null ? 0 : Date.now() - snapshotAt.value;
+  if (snapshotAge >= SNAPSHOT_NOTE_AFTER_MS) {
+    notes.push(`这一份「最热」是 ${Math.round(snapshotAge / 60_000)} 分钟前读取的快照（缓存有效期 12 小时，点刷新可重新拉取）`);
+  }
   if (blocking.length === 0 && short) {
     notes.push(`平台声明 ${declaredTotal} 条评论（含楼中楼的全部回复）；顶层 ${roots} 条根评论已全部取回，楼中楼展开时按需取回`);
   }
@@ -619,6 +640,8 @@ async function fetchPage(cursor: string | null): Promise<CursorPage<Comment>> {
     }
     // 身份限制（未登录截断等）随页带回：到底时完整性原因里要能说出「为什么只有这几条」
     identityLimitations.value = page.limitations ?? [];
+    snapshotAt.value = page.snapshotAt ?? null;
+    serverEndReason.value = page.endReason ?? null;
     // 这一页真的落定了：限流计数归零，之前的倒计时一并撤掉
     rateLimitAttempts = 0;
     if (rateLimit.value !== null) clearRateLimit();
@@ -704,6 +727,8 @@ async function resetTarget(): Promise<void> {
   located.value = null;
   subject.value = null;
   identityLimitations.value = [];
+  snapshotAt.value = null;
+  serverEndReason.value = null;
   rowCap.value = ROW_PAGE_SIZE;
   selectedId.value = null;
   visibleBottom = -Infinity;
@@ -732,6 +757,8 @@ async function switchOrder(next: RootOrder): Promise<void> {
   pager.reset();
   collapsed.value = new Set<string>();
   selectedId.value = null;
+  snapshotAt.value = null;
+  serverEndReason.value = null;
   rowCap.value = ROW_PAGE_SIZE;
   visibleBottom = -Infinity;
   sentinelVisible = false;
@@ -804,7 +831,7 @@ function revealAllRows(): void {
 
 /** 人是否还在「快到底」的区域：宿主给的视口底边已经进入已渲染内容末尾的提前量之内。 */
 function inLoadZone(): boolean {
-  return visibleBottom >= contentHeight - LOAD_MORE_MARGIN;
+  return visibleBottom >= contentHeight - prefetchMargin.value;
 }
 
 /**
@@ -1302,6 +1329,9 @@ function onParentMessage(event: MessageEvent): void {
   if (isReaderViewportMessage(event.data)) {
     // 宿主说人滚到哪了：汇进唯一闸门（边沿触发 —— 同一段到底区只取一次，见 evaluateTrigger）
     visibleBottom = event.data.visibleBottom;
+    if (typeof event.data.viewportHeight === 'number' && event.data.viewportHeight > 0) {
+      viewportHeight.value = event.data.viewportHeight;
+    }
     evaluateTrigger();
     return;
   }
@@ -1534,7 +1564,7 @@ onBeforeUnmount(() => {
       <div
         ref="sentinelEl"
         class="sentinel"
-        :style="{ transform: `translateY(${-LOAD_MORE_MARGIN}px)` }"
+        :style="{ transform: `translateY(${-prefetchMargin}px)` }"
         aria-hidden="true"
       />
       <!-- 页脚常驻：高度靠 min-height 钉住，加载中 / 到底 / 出错之间切换不会让内容忽高忽低 -->

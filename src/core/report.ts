@@ -242,6 +242,13 @@ export interface RootsPage {
   declared?: number;
   /** 本次读取的身份限制（如未登录会被平台截断）。平台「说没有下一页」时，它是唯一能解释「为什么这么少」的证据。 */
   limitations?: string[];
+  /**
+   * 这一页来自缓存里的**整条热度序快照**时，快照的写入时刻（毫秒）。
+   * 阅读器据此如实告诉用户「这份热度榜是几分钟前的」，而不是假装它刚刚实时取回。
+   */
+  snapshotAt?: number;
+  /** 提前收尾的原因（如平台会话失效、快进后仍无新内容）：视图据此如实说明，而不是假装「到底」。 */
+  endReason?: string;
 }
 
 export interface ResolvedInput {

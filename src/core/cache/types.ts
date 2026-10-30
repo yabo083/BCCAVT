@@ -15,6 +15,12 @@ export type Freshness =
   | 'meta'
   /** 原始评论分页。 */
   | 'page'
+  /**
+   * 已固化的历史区间：分页游标已经越过「最新那一页」之后的条目，平台不会再往这些位置上放新评论
+   * （新评论只会插到列表顶部）。因此它不需要跟首屏同寿命——按 page 的 30 分钟算，回看昨天读过的
+   * 旧区间就得整段重跑。
+   */
+  | 'history'
   /** 不可变：完成的分析快照、内容寻址的 AI 结果。键里必须带版本/时间戳/内容哈希。 */
   | 'immutable'
   /** 可变指针（如"某目标的最新快照 id"），无 TTL，显式覆盖。 */
@@ -25,6 +31,7 @@ export const FRESHNESS_TTL_MS: Record<Freshness, number | null> = {
   session: 30 * 60_000,
   meta: 10 * 60_000,
   page: 30 * 60_000,
+  history: 12 * 60 * 60_000,
   immutable: null,
   pointer: null,
 };

@@ -120,6 +120,8 @@ export interface ReaderViewportMessage extends ReaderBridgeMessage {
   type: typeof READER_VIEWPORT;
   /** 宿主视口底边在嵌入文档坐标系里的位置（CSS 像素，可为负）。 */
   visibleBottom: number;
+  /** 宿主视口高度（CSS 像素）：阅读器用它做「距底还有一屏就预取」的提前量；老版本宿主可能不带。 */
+  viewportHeight?: number;
 }
 
 export function isReaderViewportMessage(value: unknown): value is ReaderViewportMessage {

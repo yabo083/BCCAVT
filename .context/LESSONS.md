@@ -150,6 +150,7 @@
 - **修复**：游标改成自己的 `hot:<会话 id>:<块号>`，块按 (会话, 块号) 入页缓存（`crawl.ts#loadHotRootsPage`）：回放不产生请求；续块用链记录里的 offset；整页都是首块条目 ⇒ 会话被平台重置，开新会话重来；平台说 `is_end` 或回零条 ⇒ 链结束，界外页不回源。
 - **判据**：真机「最热」滚到底 64 条根评论，切「最新」再切回「最热」**0 回源**，**重开视频页整条链 0 回源**。
 - **教训**：分页游标不要假定「同游标 ⇒ 同内容」。先问一句「这个位置是客户端算的还是服务端记的」，答案决定缓存键是游标还是**序号**。
+- **会话活不过 20 分钟（2026-10-30 实测）**：先取 4 块（A/B/C/D）记住 id，等 20 分钟后用 D 的 offset 续 → 返回的 19 条**全是 B 块的原内容**；用更老的 offset（B 的 next）续 → 返回 A 块（榜首）。即平台在会话过期后不是简单地「续上或报错」，而是**回放到之前某个块**。所以：① 续接判据必须是「新页与已收条目**任一** id 重合 = 不是续接」，只比首块会漏掉中间块这一形态；② 认出重置后不能把重复块喂给只追加的分页器（会被 `zeroAdds` 判成到底），正确做法是**开新会话 + 快进跳过重合块**，交出第一页带新条目的内容；快进额度（3 块）用完仍全是旧内容就如实收尾并给出 `endReason`；③ 未走完的链记录只能给短 TTL（30 分钟）——它担保的是「会话还活着」，跨小时的续接没有意义。
 
 ## L-17 阅读器「不完整」的两个真根因：声明数是全部后代 + 交互请求绕开限速（2026-10-30）
 
@@ -164,3 +165,15 @@
 - **判据 2**：单测覆盖倒计时文案 → 到点自动重试 → 行出现；真机本轮全程未再触发 412。
 
 **相关位置**：`src/core/crawl.ts#loadHotRootsPage`、`src/core/rate-limit.ts#createSharedLimiter`、`src/ui/EmbeddedComments.vue#completeness` / `#noteRateLimited`、[ADR-0010](../docs/adr/0010-shared-rate-limit.md)、`tests/core/roots-page.test.ts`、`tests/ui/embedded-comments-reader.test.ts`。
+
+## L-18 缓存寿命要跟着「数据自己会不会变」分层，而不是一刀切（2026-10-30）
+
+- **现象**：「回看已读区间 0 回源」只在 30 分钟内成立——30 分钟一过，时间序整段、热度序整链都要重走（4–30 个请求）。
+- **根因**：所有分页共用一个 `page` TTL。但时间序第 21 条往后的位置**不会被新评论挤动**（新评论只进顶部），续块用的服务端会话也只在短期内可靠——两种寿命被写成了同一个数。
+- **修法**：`Freshness` 加 `history`（12 小时）。时间序首屏 `page`／更深页 `history`；热度序块 `history`、链记录「未走完 `page`／走完 `history`」。**会话担保必须是短的**：链记录里存着续块要用的 offset，跨小时续接平台不一定还认，所以只有「已经走完、根本不需要再回源」的快照才给长寿命。
+- **判据**：`entries` 里首屏键约 30 分钟、深页键约 12 小时；跨 45 分钟后回看首屏回源、深页仍命中（单测 `roots-page.test.ts` 用可控时钟覆盖）。
+- **顺带的两个正确性补丁**：① 会话重置守卫从「整页都等于首块」放宽到「**任一 id 已在链里**」——中间块的重置同样会让旧块冒充第 N 块、静默吞掉一段；② 两个标签页同看一个视频时，热度序整段取数放进 `loupe-hot|<subject>|<account>` 的 Web Lock，否则两边「读链记录 → 回源 → 写记录」互相覆盖指针。
+- **诚实优先**：整条快照回放超过 5 分钟就在完整度气泡里写明「这是 N 分钟前读取的快照」，实时页不标——缓存不能假装自己是实时的。
+- **预取只动触发位置**：宿主把 `viewportHeight` 一起送进 `READER_VIEWPORT`，阅读器用「距底一屏」做阈值（`prefetchMargin = max(480, viewportHeight)`）。边沿触发、单飞、每页一次都不变，请求数不变；提前量只买一次 RTT 的观感。**别把提前量继续放大**：那是拿请求换手感，用户往往就在那儿停下。
+
+**相关位置**：`src/core/cache/types.ts#FRESHNESS_TTL_MS`、`src/core/crawl.ts#loadRootsPage` / `#loadHotRootsPage`、`src/ui/EmbeddedComments.vue#prefetchMargin` / `#completeness`、`src/extension/content/page-reader.ts#postViewport`、`tests/core/roots-page.test.ts`、`tests/ui/embedded-comments-reader.test.ts`。

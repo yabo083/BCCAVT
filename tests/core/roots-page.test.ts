@@ -26,6 +26,14 @@ function build(adapter: FakeAdapter): Workbench {
   return createWorkbench({ adapters: [adapter], cache, http: createHttpClient(), now: tickingNow() });
 }
 
+/** 手动推进的时钟：验分层 TTL 要靠它跨过 30 分钟页 TTL。 */
+function buildWithClock(adapter: FakeAdapter): { workbench: Workbench; advance: (ms: number) => void } {
+  let clock = Date.UTC(2026, 0, 1);
+  const now = (): number => clock;
+  const cache = createCache({ dbName: uniqueDbName(), now });
+  return { workbench: createWorkbench({ adapters: [adapter], cache, http: createHttpClient(), now }), advance: (ms) => { clock += ms; } };
+}
+
 describe('按游标取一页顶层评论（previewRootsPage）', () => {
   it('一页就是一次请求，游标与平台声明数原样回传', async () => {
     const adapter = new FakeAdapter();
@@ -211,6 +219,108 @@ describe('按游标取一页顶层评论（previewRootsPage）', () => {
     expect([first.roots[0]?.id, second.roots[0]?.id, third.roots[0]?.id]).toEqual(['a', 'b', 'c']);
     // 第三次请求回的是首块（a）⇒ 判定会话被重置，另开一条会话（null）重取
     expect(adapter.rootCursors).toEqual([null, 'same-offset', 'same-offset', null]);
+  });
+
+  it('会话被重置到中间某块时也认出来：任一 id 重复即按新会话重来', async () => {
+    const adapter = new FakeAdapter();
+    // 第 4 次请求故意回第 2 块的内容——不是榜首，而是会话中间某块
+    const script: Array<Array<string>> = [['a'], ['b'], ['c'], ['b'], ['d']];
+    adapter.rootsProvider = () => {
+      const ids = script.shift() ?? [];
+      return { items: ids.map((id) => makeComment({ id })), next: 'same-offset' };
+    };
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
+
+    const first = await read(null);
+    const second = await read(first.next);
+    const third = await read(second.next);
+    const fourth = await read(third.next);
+
+    expect([first.roots[0]?.id, second.roots[0]?.id, third.roots[0]?.id, fourth.roots[0]?.id]).toEqual(['a', 'b', 'c', 'd']);
+    expect(adapter.rootCursors).toEqual([null, 'same-offset', 'same-offset', 'same-offset', null]);
+  });
+
+  it('会话失效后重来并快进跳过重合块：交出第一页带新条目的内容，不把重复行喂给只追加的分页器', async () => {
+    const adapter = new FakeAdapter();
+    const script: Array<Array<string>> = [['a'], ['b'], ['c'], ['b'], ['a'], ['b'], ['d']];
+    adapter.rootsProvider = () => {
+      const ids = script.shift() ?? [];
+      return { items: ids.map((id) => makeComment({ id })), next: 'same-offset' };
+    };
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
+
+    const first = await read(null);
+    const second = await read(first.next);
+    const third = await read(second.next);
+    // 第 4 次：平台回的是第 2 块（会话重置）→ 新开一条，快进过 a、b，交出 d
+    const fourth = await read(third.next);
+
+    expect([first.roots[0]?.id, second.roots[0]?.id, third.roots[0]?.id, fourth.roots[0]?.id]).toEqual(['a', 'b', 'c', 'd']);
+    expect(fourth.next).not.toBeNull();
+    expect(adapter.rootCursors).toEqual([null, 'same-offset', 'same-offset', 'same-offset', null, 'same-offset', 'same-offset']);
+  });
+
+  it('快进额度用完仍全是已读内容：如实收尾并给出原因，不假装「到底」', async () => {
+    const adapter = new FakeAdapter();
+    const script: Array<Array<string>> = [['a'], ['b'], ['c'], ['d'], ['e'], ['a'], ['a'], ['b'], ['c'], ['d']];
+    adapter.rootsProvider = () => {
+      const ids = script.shift() ?? [];
+      return { items: ids.map((id) => makeComment({ id })), next: 'same-offset' };
+    };
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
+
+    let cursor: string | null = null;
+    for (let i = 0; i < 5; i++) cursor = (await read(cursor)).next;
+    const page = await read(cursor);
+
+    expect(page.roots).toEqual([]);
+    expect(page.next).toBeNull();
+    expect(page.endReason).toContain('会话已失效');
+  });
+
+  it('整条热度序快照回放时带上快照时刻；实时取到的页没有', async () => {
+    const adapter = new FakeAdapter();
+    let round = 0;
+    adapter.rootsProvider = () => {
+      round += 1;
+      return round <= 2 ? { items: [makeComment({ id: `h${round}` })], next: 'same-offset' } : { items: [], next: null };
+    };
+    const workbench = build(adapter);
+    const hot = options({ order: 'hot' });
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, hot, noop, signal());
+
+    const first = await read(null);
+    expect(first.snapshotAt).toBeUndefined();
+    const second = await read(first.next);
+    await read(second.next);
+
+    // 链已走完：重开阅读器整段回放，标明这是快照
+    const replay = await read(null);
+    expect(replay.roots.map((comment) => comment.id)).toEqual(['h1']);
+    expect(typeof replay.snapshotAt).toBe('number');
+  });
+
+  it('分层 TTL：首屏 30 分钟、更深页 12 小时——回看旧区间不再整段重跑', async () => {
+    const adapter = new FakeAdapter();
+    adapter.rootsProvider = pagedRoots([[makeComment({ id: 'r1' })], [makeComment({ id: 'r2' })]]);
+    const { workbench, advance } = buildWithClock(adapter);
+    const read = (cursor: string | null) => workbench.previewRootsPage(adapter.subject.ref, cursor, options(), noop, signal());
+
+    const first = await read(null);
+    await read(first.next);
+    expect(adapter.calls.roots).toBe(2);
+
+    advance(45 * 60_000); // 页 TTL 30 分钟（含 ±10% 抖动）已过
+    await read(null); // 首屏要回源：新评论会出现在顶部
+    expect(adapter.calls.roots).toBe(3);
+    await read(first.next); // 深页命 12 小时的 history 缓存
+    expect(adapter.calls.roots).toBe(3);
   });
 
   it('平台在热度序里说完之后不再回源：链的界外页也按末页回答', async () => {

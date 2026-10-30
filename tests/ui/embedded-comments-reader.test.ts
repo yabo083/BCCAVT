@@ -83,10 +83,14 @@ interface PlannedPage {
   cursor: string | null;
   comments: Comment[];
   next: string | null;
+  /** 整条热度序快照回放时平台侧带回的快照时刻。 */
+  snapshotAt?: number;
+  /** 抓取层提前收尾的原因。 */
+  endReason?: string;
 }
 
 /** 页面计划：键是游标（首屏是 'start'）。 */
-let plan: Map<string, { comments: Comment[]; next: string | null }>;
+let plan: Map<string, { comments: Comment[]; next: string | null; snapshotAt?: number; endReason?: string }>;
 /** 每次取数请求的游标：断言「只取一次」「不跳页」都靠它。 */
 let requests: Array<string | null>;
 /** 让某个游标第一次取数失败（模拟平台限流）。 */
@@ -108,7 +112,9 @@ let post: MockInstance;
 enableAutoUnmount(afterEach);
 
 function planPages(pages: PlannedPage[]): void {
-  plan = new Map(pages.map((page) => [page.cursor ?? 'start', { comments: page.comments, next: page.next }]));
+  plan = new Map(
+    pages.map((page) => [page.cursor ?? 'start', { comments: page.comments, next: page.next, snapshotAt: page.snapshotAt, endReason: page.endReason }]),
+  );
 }
 
 /** 造一页顶层评论：塞到超过一批（`ROW_PAGE_SIZE = 100`），用来观察「分批铺开 / 到底一次铺开」。 */
@@ -130,10 +136,15 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve: (value) => settle(value) };
 }
 
-function deliverViewport(visibleBottom: number): void {
+function deliverViewport(visibleBottom: number, viewportHeight?: number): void {
   window.dispatchEvent(
     new MessageEvent('message', {
-      data: { source: READER_BRIDGE_SOURCE, type: READER_VIEWPORT, visibleBottom },
+      data: {
+        source: READER_BRIDGE_SOURCE,
+        type: READER_VIEWPORT,
+        visibleBottom,
+        ...(viewportHeight === undefined ? {} : { viewportHeight }),
+      },
       origin: 'https://www.bilibili.com',
       source: window,
     }),
@@ -287,6 +298,8 @@ beforeEach(() => {
         next: page.next,
         declared: 100,
         limitations: pageLimitations,
+        ...(page.snapshotAt === undefined ? {} : { snapshotAt: page.snapshotAt }),
+        ...(page.endReason === undefined ? {} : { endReason: page.endReason }),
       };
     },
   );
@@ -322,6 +335,64 @@ describe('嵌入阅读器的取数触发', () => {
     expect(requests).toEqual([null, 'p1']);
     expect(wrapper.findAll('.comment-row')).toHaveLength(3);
     expect(wrapper.text()).toContain('没有更多评论了');
+  });
+
+  it('距底还有一屏就预取：提前量随宿主视口高度走，仍然每页只取一次', async () => {
+    planPages([
+      { cursor: null, comments: [ROOT, SECOND], next: 'p1' },
+      { cursor: 'p1', comments: [OLDER_ROOT], next: null },
+    ]);
+    const wrapper = await open();
+    expect(requests).toEqual([null]);
+    // 模拟布局：内容高 1000 + 2×100 = 1200
+    // 旧阈值 480 下 visibleBottom=500 不触发；一屏 800 的提前量下就该预取
+    deliverViewport(500, 800);
+    await settle();
+
+    expect(requests).toEqual([null, 'p1']);
+    expect(wrapper.findAll('.comment-row')).toHaveLength(3);
+  });
+
+  it('提前量依然是边沿触发：预取一次之后同段到底区不再重复请求', async () => {
+    planPages([
+      { cursor: null, comments: [ROOT, SECOND], next: 'p1' },
+      { cursor: 'p1', comments: [OLDER_ROOT], next: null },
+    ]);
+    await open();
+
+    deliverViewport(500, 800);
+    await settle();
+    expect(requests).toEqual([null, 'p1']);
+
+    for (let round = 0; round < 3; round += 1) deliverViewport(500, 800);
+    await settle();
+    expect(requests).toEqual([null, 'p1']);
+  });
+
+  it('抓取层提前收尾时如实报「不完整」并说明原因，不假装到底', async () => {
+    planPages([
+      {
+        cursor: null,
+        comments: [ROOT, SECOND],
+        next: null,
+        endReason: '平台的热度序会话已失效，剩下的评论请点刷新重新拉取',
+      },
+    ]);
+    const wrapper = await open();
+
+    expect(wrapper.text()).toContain('不完整');
+    const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
+    expect(label).toContain('会话已失效');
+  });
+
+  it('整条热度序快照回放时，完整度气泡说明「这是几分钟前的快照」', async () => {
+    const readAt = Date.now() - 20 * 60_000;
+    planPages([{ cursor: null, comments: [ROOT, SECOND], next: null, snapshotAt: readAt }]);
+    const wrapper = await open();
+
+    const label = wrapper.get('button.tip-trigger[aria-label^="完整度"]').attributes('aria-label') ?? '';
+    expect(label).toContain('分钟前读取的快照');
+    expect(wrapper.text()).toContain('完整');
   });
 
   it('到底（next === null）之后，视口消息与哨兵交叉都不再触发请求', async () => {

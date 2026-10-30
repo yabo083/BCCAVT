@@ -643,12 +643,15 @@ function onHostViewport(): void {
   dismissUserCard();
 }
 
-/** 告诉嵌入页「宿主视口底边在嵌入文档坐标系里的位置」：它据此在快滚到底时取下一页顶层评论。 */
+/**
+ * 告诉嵌入页「宿主视口底边在嵌入文档坐标系里的位置」与「一屏有多高」：
+ * 前者用于判断快滚到底，后者是提前量——距底还有一屏就开始取下一页，把一次 RTT 藏进滚动里。
+ */
 function postViewport(): void {
   const current = slot;
   if (!readerReady || frame === null || current === null) return;
   const visibleBottom = window.innerHeight - current.getBoundingClientRect().top;
-  postToFrame({ source: READER_BRIDGE_SOURCE, type: READER_VIEWPORT, visibleBottom });
+  postToFrame({ source: READER_BRIDGE_SOURCE, type: READER_VIEWPORT, visibleBottom, viewportHeight: window.innerHeight });
 }
 
 /**
