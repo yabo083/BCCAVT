@@ -18,21 +18,37 @@ const detail = computed(() => {
 </script>
 
 <template>
+  <!-- 徽标本身就是气泡的触发器：再点一个 ⓘ 会在同一行出现两个图标，读起来像重复的提示。
+       状态图标（✓/!）已经说明「完整与否」，解释放气泡里，指针 hover 或键盘 focus 都能打开。 -->
   <span class="row completeness small">
-    <span class="badge" :class="completeness.truncated ? 'badge-warning' : 'badge-success'">
-      <IconWarningCircle v-if="completeness.truncated" />
-      <IconCheckCircle v-else />
-      {{ completeness.truncated ? '不完整' : '完整' }}
-    </span>
+    <InfoTip :text="detail" :label="'完整度：' + detail">
+      <template #trigger>
+        <span class="badge" :class="completeness.truncated ? 'badge-warning' : 'badge-success'">
+          <IconWarningCircle v-if="completeness.truncated" />
+          <IconCheckCircle v-else />
+          {{ completeness.truncated ? '不完整' : '完整' }}
+        </span>
+      </template>
+    </InfoTip>
     <span v-if="!props.compact" class="tnum subtle">
       {{ formatCount(completeness.fetched) }}<template v-if="completeness.declared !== undefined"> / {{ formatCount(completeness.declared) }}</template>
     </span>
-    <InfoTip :text="detail" :label="'完整度：' + detail" />
   </span>
 </template>
 
 <style scoped>
 .completeness {
   gap: var(--sp-1);
+}
+
+/* 触发器换成徽标本身：去掉 ⓘ 的按钮壳样式（颜色 / 光标 / 图标尺寸都跟徽标走）。 */
+.completeness :deep(.tip-trigger) {
+  color: inherit;
+  cursor: help;
+}
+
+.completeness :deep(.tip-trigger svg) {
+  width: 12px;
+  height: 12px;
 }
 </style>

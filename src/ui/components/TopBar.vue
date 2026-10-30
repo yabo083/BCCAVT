@@ -8,7 +8,7 @@
  *      登录态那一段文字已删——`SessionChip` 已经把身份摆在同一排，再写一句「登录态/匿名」是重复。
  * 输入与抓取选项在左侧「输入」面板里（TargetView），这里只读不写。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import IconChatCircleText from '~icons/ph/chat-circle-text';
 import IconGraph from '~icons/ph/graph';
 import IconTreeStructure from '~icons/ph/tree-structure';
@@ -67,8 +67,27 @@ function toggleTheme(): void {
   localStorage.setItem(THEME_KEY, next);
 }
 
-onMounted(() => systemDark.addEventListener('change', onSystemThemeChange));
-onBeforeUnmount(() => systemDark.removeEventListener('change', onSystemThemeChange));
+function onReduceMotionChange(): void {
+  reduceMotion.value = reduceMotionQuery.matches;
+}
+
+onMounted(() => {
+  systemDark.addEventListener('change', onSystemThemeChange);
+  reduceMotionQuery.addEventListener('change', onReduceMotionChange);
+  rotateTimer = window.setInterval(() => {
+    if (holdNumbers.value || numberSlices.value.length < 2) return;
+    activeNumber.value = (activeNumber.value + 1) % numberSlices.value.length;
+  }, NUMBER_ROTATE_MS);
+  clockTimer = window.setInterval(() => {
+    nowTick.value = Date.now();
+  }, 30_000);
+});
+onBeforeUnmount(() => {
+  systemDark.removeEventListener('change', onSystemThemeChange);
+  reduceMotionQuery.removeEventListener('change', onReduceMotionChange);
+  if (rotateTimer !== undefined) window.clearInterval(rotateTimer);
+  if (clockTimer !== undefined) window.clearInterval(clockTimer);
+});
 
 const result = computed(() =>
   props.kind === 'thread' ? state.thread : props.kind === 'subject' ? state.subject : null,
@@ -76,6 +95,46 @@ const result = computed(() =>
 const report = computed(() => result.value?.report ?? null);
 const snapshot = computed(() => result.value?.snapshot ?? null);
 const limitations = computed(() => (state.session && !state.session.loggedIn ? state.session.limitations : []));
+/**
+ * 参数行的数字分片：报告侧（评论 / 参与者）与画布侧（节点 / 边）。
+ * 两片同时平铺时这一排会变成四个数字、横向拉得很长，于是收进**同一格轮播**——
+ * 宽度取两片的最大值，所以换片不跳版；悬停即暂停；`prefers-reduced-motion` 下退回平铺
+ * （不做动效，也不再隐藏信息）。
+ */
+const numberSlices = computed<Array<{ key: string; text: string }>>(() => {
+  const slices: Array<{ key: string; text: string }> = [];
+  if (report.value !== null && snapshot.value !== null) {
+    slices.push({
+      key: 'report',
+      text: `${formatCount(report.value.overview.total)} 条评论 · ${formatCount(report.value.overview.authors)} 位参与者`,
+    });
+  }
+  if (props.nodes !== null) {
+    slices.push({ key: 'graph', text: `${formatCount(props.nodes)} 节点 · ${formatCount(props.links ?? 0)} 边` });
+  }
+  return slices;
+});
+const NUMBER_ROTATE_MS = 6000;
+const reduceMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+const reduceMotion = ref(reduceMotionQuery.matches);
+const rotatingNumbers = computed(() => numberSlices.value.length > 1 && !reduceMotion.value);
+const activeNumber = ref(0);
+/** 悬停 / 键盘焦点在读这一片时停住，别在眼皮底下换掉。 */
+const holdNumbers = ref(false);
+const numbersText = computed(() => numberSlices.value.map((slice) => slice.text).join(' · '));
+watch(numberSlices, (slices) => {
+  if (activeNumber.value >= slices.length) activeNumber.value = 0;
+});
+/**
+ * 「抓取于…」必须自己走时：快照不变时组件不会重渲染，之前那句「刚刚」会一直停在刚刚。
+ * 30 秒推一次，粒度正好是相对时间的显示精度（分钟）。
+ */
+const nowTick = ref(Date.now());
+const fetchedLabel = computed(() =>
+  snapshot.value === null ? '' : `抓取于 ${formatRelative(snapshot.value.fetchedAt, nowTick.value)}`,
+);
+let rotateTimer: number | undefined;
+let clockTimer: number | undefined;
 /** 仿真状态：暂停中 / 已收敛 / 仍在跑；还没建图时不出这个 chip。 */
 const physicsLabel = computed(() =>
   props.paused === null ? null : props.paused ? '已暂停' : props.settled ? '已收敛' : '仿真中',
@@ -145,25 +204,40 @@ function refresh(): void {
       <IconGraph v-else class="scope-icon" />
       <span class="scope-label">{{ props.scopeLabel }}</span>
 
-      <!-- ② 主文字：评论数与参与者数。 -->
-      <template v-if="report && snapshot">
+      <!-- ② 数字：报告侧与画布侧共用一格轮播（悬停暂停；减少动效偏好下平铺） -->
+      <template v-if="numberSlices.length > 0">
         <span class="sep" aria-hidden="true">·</span>
-        <span>{{ formatCount(report.overview.total) }} 条评论</span>
-        <span class="sep" aria-hidden="true">·</span>
-        <span>{{ formatCount(report.overview.authors) }} 位参与者</span>
+        <span
+          v-if="rotatingNumbers"
+          class="numbers tnum"
+          :title="numbersText"
+          :aria-label="numbersText"
+          @mouseenter="holdNumbers = true"
+          @mouseleave="holdNumbers = false"
+          @focusin="holdNumbers = true"
+          @focusout="holdNumbers = false"
+        >
+          <span
+            v-for="(slice, index) in numberSlices"
+            :key="slice.key"
+            class="number-slice"
+            :class="{ active: index === activeNumber }"
+            :aria-hidden="index !== activeNumber"
+          >{{ slice.text }}</span>
+        </span>
+        <template v-else>
+          <span v-for="(slice, index) in numberSlices" :key="slice.key">
+            <span v-if="index > 0" class="sep minor" aria-hidden="true">·</span>
+            <span :class="{ minor: slice.key === 'graph' }">{{ slice.text }}</span>
+          </span>
+        </template>
       </template>
 
-      <!-- ③ 衬影文字：图的规模紧跟在主文字后面，小一号、弱一档，读作同一句的补充。 -->
-      <template v-if="props.nodes !== null">
-        <span class="sep minor" aria-hidden="true">·</span>
-        <span class="minor">{{ formatCount(props.nodes) }} 节点 · {{ formatCount(props.links ?? 0) }} 边</span>
-      </template>
-
-      <!-- ④ 完整度与抓取时间，⑤ 状态 chip 收尾。 -->
+      <!-- ③ 完整度与抓取时间，④ 状态 chip 收尾。 -->
       <template v-if="report && snapshot">
         <span class="sep" aria-hidden="true">·</span>
         <CompletenessBadge :completeness="snapshot.completeness" compact />
-        <span class="minor">抓取于 {{ formatRelative(snapshot.fetchedAt) }}</span>
+        <span class="minor">{{ fetchedLabel }}</span>
       </template>
       <span v-if="result?.fromSnapshot" class="chip chip-info minor">来自快照</span>
       <span v-if="physicsLabel" class="chip">{{ physicsLabel }}</span>
@@ -174,6 +248,24 @@ function refresh(): void {
 <style scoped>
 .top {
   gap: var(--sp-1);
+}
+
+/* 轮播格：两片叠在同一格里，格子宽度取较宽的那片，所以换片时整排不跳。 */
+.numbers {
+  display: inline-grid;
+  grid-template-areas: 'slot';
+  vertical-align: baseline;
+}
+
+.number-slice {
+  grid-area: slot;
+  transition: opacity 220ms ease;
+}
+
+/* 隐掉的片仍参与布局（占位不塌），但不进无障碍树。 */
+.number-slice:not(.active) {
+  opacity: 0;
+  visibility: hidden;
 }
 
 /* 第一级：品牌 + 标题 + 动作，动作组不换行，标题自己省略号收尾。 */

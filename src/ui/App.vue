@@ -946,12 +946,11 @@ function openInputPanel(): void {
 /* 收起态：面板本体（.panel 的玻璃底 / 边框 / 投影）全部让给把手，避免「方板 + 内层把手」叠成两层壳。
    **顶边与展开态对齐（align-self: start）**：展开/收起切换时这一侧的上边缘不动，
    只换形态（竖把手 ↔ 面板），不然整块会从屏幕中间跳回顶部。
-   **右边贴壁**：`.overlay` 有 12px 内边距，收起时用等量负外边距把把手顶到视口右缘——
-   把手本来就是「贴壁的书签」（右角方、右边无描边），留一条缝就变成浮在中间的小方块。 */
+   **与其余三块浮岛同规格**：同样留在 `.overlay` 的 12px 内边距里、同样四面圆角——
+   单独一枚贴壁的方角书签在四块浮岛之间会显得是另一个体系。 */
 .detail-panel.collapsed {
   width: auto;
   padding: 0;
-  margin-right: calc(var(--sp-3) * -1);
   align-self: start;
   border: 0;
   border-radius: 0;
@@ -969,7 +968,7 @@ function openInputPanel(): void {
   padding-bottom: var(--sp-2);
 }
 
-/* 收起把手：贴右缘的一枚竖向胶囊书签（左侧圆角、右侧贴壁平直），自带浮岛材质。
+/* 收起把手：一枚竖向小浮岛，规格与其余三块浮岛一致（`--r-md` 四面圆角、四面描边、玻璃底）。
    hover 向左微弹一下表示「可以拉出来」，图标与文字都是竖排的两字。 */
 .detail-handle {
   display: flex;
@@ -981,8 +980,7 @@ function openInputPanel(): void {
   height: 104px;
   padding: var(--sp-2) 0;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  border-right: 0;
-  border-radius: var(--r-md) 0 0 var(--r-md);
+  border-radius: var(--r-md);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(18px);
   box-shadow: var(--deck-shadow-side), inset 0 1px 0 var(--glass-hl);
